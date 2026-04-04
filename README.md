@@ -277,10 +277,34 @@ Cloud deployment (e.g., GCP TDX) is also viable at `A3[GCP TDX] | R4 | B2 | K4` 
 
 ---
 
+## Code References & Reuse
+
+### [`vkobel/enclave-tls-api-fetcher`](https://github.com/vkobel/enclave-tls-api-fetcher) ⭐ Primary reference
+
+A Nitro Enclave TLS fetcher with attestation, written in Rust. Large portions are directly reusable or adaptable:
+
+| Crate / Module | Reuse in Gateway | Notes |
+|---|---|---|
+| `crates/enclave/src/tls/` | Outbound TLS to upstream APIs | TLS termination + proxy_io pattern inside enclave — use as-is |
+| `crates/enclave/src/vsock/` | Enclave↔host communication channel | Swap for link-local if not using vsock; reuse otherwise |
+| `crates/common/src/hpke.rs` | Attested operator injection channel | HPKE for credential bootstrap — reuse directly |
+| `crates/common/src/protocol.rs` | Request/response framing | Adapt to gateway API surface |
+| `crates/attestation-verifier/` | Attestation Gate (Phase 4) | PCR/quote verification library — reuse directly, swap NSM for TDX/SEV-SNP crates |
+| `crates/host-proxy/` | Agent-facing HTTP API | Adapt: flip from fetcher API to proxy API |
+
+**Key delta from this codebase:**
+- Replace AWS Nitro NSM attestation with Intel TDX (`tdx-attest` crate) or AMD SEV-SNP (`sev` crate) — structure is identical
+- Add inbound request routing (path-prefix → upstream mapping) instead of explicit URL parameter
+- Add Policy Engine (new — YAML rules, method + path matching)
+- Add Credential Vault (new — sealed encrypted store)
+
+**Estimated savings:** Phases 1 and 4 of the implementation plan are largely already written here (~2–3 weeks of work reused).
+
+---
+
 ## Related Work
 
 - **exe.dev LLM Gateway** — inspiration for the link-local proxy pattern; scoped to LLM providers, no attestation, no policy
-- **exit.dev** — similar name, different product
 - **Phala Network tappd** — TEE-based secret management for Web3 workloads
 - **Practical CoCo Framework** — scoring framework for evaluating this deployment's verifiability posture
 
