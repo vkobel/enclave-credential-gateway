@@ -1,394 +1,131 @@
 # CoCo Credential Gateway
 
-> A TEE-hardened universal API credential proxy for AI agents, with semantic policy enforcement.
-
-**Status:** Concept / Early Spec  
-**Author:** Vinclaw  
-**Date:** April 2026
+> A TEE-hardened universal API & LLM credential proxy for AI agents, featuring portable vaults, semantic policy enforcement, and remote attestation.
 
 ---
 
-## Problem
+## 🛑 The Problem
 
-AI agents need credentials to be useful — GitHub tokens, LLM API keys, payment APIs, communication services. Today, these credentials are either:
+AI agents require credentials to be useful — GitHub tokens, OpenAI API keys, payment APIs, and communication services. Today, these credentials are fundamentally vulnerable:
 
-1. **Baked into the agent's environment** — visible to any compromised process, logged by accident, leaked through tool calls
-2. **Injected at runtime** — still in plaintext in memory, still exfiltrable
+1. **Host Environment Compromise:** Keys baked into laptops, cloud VMs, or CI runners are visible to compromised dependencies, memory dumps, or supply chain attacks.
+2. **Configuration Fatigue:** Users of tools like OpenClaw or Claude Desktop constantly wrestle with reconfiguring API keys across different platforms and providers.
+3. **Inadequate Partial Solutions:**
+   - **Secret Managers (Vault):** Protect secrets at rest but hand them to the agent in plaintext at runtime.
+   - **LLM Gateways (LiteLLM, OpenRouter):** Abstract LLM keys but lack hardware-level guarantees, don't cover non-LLM APIs (e.g., GitHub), and require trusting a third-party host.
+   - **Local Sandboxes (Nono):** Great for local "phantom token" injection, but tied to a single machine's OS keychain with no remote attestation or cross-machine portability.
 
-The threat is not hypothetical. A compromised dependency, a malicious tool call, a supply chain attack, or simple misconfiguration can silently exfiltrate every secret the agent holds. The agent is the weakest link precisely because it is the most active part of the system.
-
-**Agents run on untrusted platforms.** Most production agent deployments are not in TEEs: laptops, cloud VMs, CI runners, serverless functions, container orchestrators. Hardware attestation of the agent itself is rarely practical or possible. This is the norm, not the exception.
-
-Existing partial solutions:
-- **Secret managers** (Vault, AWS Secrets Manager) — protect secrets at rest, but hand them to the agent in plaintext at runtime
-- **LLM gateways** (exe.dev, OpenRouter) — abstract LLM API keys from agents, but scoped to LLM calls only, with no attestation or semantic policy
-- **TEE-based key management** — protects secrets inside an enclave, but doesn't mediate runtime agent calls
-
-None of these address the full problem: **an agent that can make arbitrary API calls with injected credentials can still do harm**, even without ever seeing the raw key.
+**An agent that can make arbitrary API calls with injected credentials can still do harm, even if it never sees the raw key.** Without a robust, network-accessible, hardware-attested proxy, the agent remains the weakest link.
 
 ---
 
-## Solution
+## 💡 The Solution
 
-A **remotely accessible credential gateway** running inside a Confidential VM (CVM), exposed as an HTTPS endpoint:
+**CoCo Credential Gateway** is a remotely accessible credential proxy running inside a Confidential VM (CVM) or TEE (Intel TDX, AMD SEV-SNP, AWS Nitro). It acts as an **AI Firewall and Portable Vault**, intercepting agent requests, evaluating them against semantic policies, injecting the real credentials, and forwarding them to the upstream provider.
 
-1. **Universal** — covers any HTTP API, not just LLM providers
-2. **TEE-hardened** — credentials sealed to hardware state, never leave the enclave boundary
-3. **Attestation-verified gateway** — operators and users verify the gateway's hardware attestation before trusting it with credentials; the TLS certificate is cryptographically bound to the enclave
-4. **Identity-gated agents** — agents authenticate via API keys or mTLS client certificates, not hardware attestation
-5. **Semantically enforced** — per-credential, per-operation, per-agent policies enforced inside the enclave
+### Core Value Pillars
 
-The agent never holds credentials. It makes calls to the gateway as if it were the upstream API. The gateway enforces policy, injects credentials, and forwards. The raw secret never crosses the enclave boundary — even if the agent is fully compromised.
+1. **The "Phantom Token" Pattern, Elevated:** Agents authenticate to CoCo using identity-based session tokens. CoCo swaps these for the real API keys inside the enclave. The raw secrets _never_ touch the agent's host machine.
+2. **Universal LLM & API Routing:** Acts as a drop-in `BASE_URL` replacement. It provides an OpenAI-compatible endpoint for LLMs (integrating patterns from LiteLLM) _and_ standard proxying for REST APIs (GitHub, Stripe, etc.).
+3. **Portable Encrypted Vaults:** Users hold a master passphrase or hardware key. They can export their encrypted vault blob and drop it into any new CoCo instance. The vault only decrypts if the gateway's hardware attestation is verified.
+4. **Semantic AI Firewall:** Beyond basic method/path blocking, CoCo evaluates the _intent_ of a request (e.g., "Block any request attempting to delete a production repository" or "Block transactions over $5,000 unless initiated by identity `ops-lead`" in Fintech use cases).
+5. **Verifiable Hardware Trust:** Built reproducibly (Nix + Rust), terminating TLS _inside_ the enclave, with cryptographic proof of the gateway's integrity.
 
 ---
 
-## Architecture
+## 🏗️ Architecture
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│                     Agents (any platform)                          │
-│                                                                    │
-│   Laptop          Cloud VM          CI Runner         Container    │
-│     │                │                  │                 │        │
-│     └────────────────┴──────────────────┴─────────────────┘        │
-│                              │                                      │
-│                              │ HTTPS + API key / mTLS client cert  │
-│                              ▼                                      │
-└────────────────────────────────────────────────────────────────────┘
-                               │
-                               │  TLS terminates inside enclave
-                               │  (cert bound to attestation report)
-                               ▼
-┌────────────────────────────────────────────────────────────────────┐
-│              Gateway CVM (Confidential Enclave)                    │
-│                                                                    │
-│  ┌────────────────────┐                                            │
-│  │ Attested TLS       │  ◄── keypair generated inside enclave     │
-│  │ Endpoint           │      pubkey in attestation report          │
-│  │                    │      TLS cert = proof of enclave binding   │
-│  └─────────┬──────────┘                                            │
-│            │                                                       │
-│            ▼                                                       │
-│  ┌────────────────────┐  ┌──────────────┐  ┌────────────────────┐ │
-│  │ Agent Identity     │  │ Policy Engine│  │  Credential Vault  │ │
-│  │ Gate               │  │              │  │                    │ │
-│  │                    │  │ per-provider │  │ sealed to PCR/MRTD │ │
-│  │ API key / mTLS     │  │ per-op rules │  │ never leaves CVM   │ │
-│  │ → agent identity   │  │ per-agent    │  │                    │ │
-│  │ → policy scope     │  │ scoping      │  │                    │ │
-│  └──────────┬─────────┘  └──────┬───────┘  └────────┬───────────┘ │
-│             │                   │                    │             │
-│             └───────────────────┼────────────────────┘             │
-│                                 │                                  │
-│                          ┌──────▼───────┐                          │
-│                          │  Forwarder   │  ◄── injects credential │
-│                          │              │      into outbound req   │
-│                          └──────┬───────┘                          │
-│                                 │                                  │
-│                    ┌────────────▼────────────┐                     │
-│                    │    Audit Log (sealed)   │                     │
-│                    └─────────────────────────┘                     │
-│                                                                    │
-└────────────────────────────────────────────────────────────────────┘
-                               │
-                               │ TLS to upstream
-                               ▼
-              api.github.com / api.openai.com / etc.
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          Agents (Any Platform)                          │
+│                                                                         │
+│    Laptop (OpenClaw)       Cloud VM (CrewAI)         CI Runner          │
+│            │                       │                     │              │
+│            └───────────────────────┴─────────────────────┘              │
+│                                    │                                    │
+│                     HTTPS + Phantom Token / mTLS                        │
+│                                    ▼                                    │
+└─────────────────────────────────────────────────────────────────────────┘
+                                     │
+                                     │ Attested TLS (terminates in CVM)
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                 Gateway CVM (Confidential Enclave)                      │
+│                                                                         │
+│  ┌────────────────────┐   ┌──────────────────────────────────────────┐  │
+│  │ Attested TLS       │   │           Portable Vault Core            │  │
+│  │ Endpoint           │   │                                          │  │
+│  │ (Pubkey in quote)  │   │  User Unlocks ──► Decrypts into memory   │  │
+│  └─────────┬──────────┘   │  Sealed to hardware measurement (MRTD)   │  │
+│            │              └────────────────────┬─────────────────────┘  │
+│            ▼                                   │                        │
+│  ┌────────────────────┐   ┌────────────────────▼─────────────────────┐  │
+│  │ Agent Identity Gate│──►│            Policy Engine                 │  │
+│  │ (Maps phantom token│   │ - YAML path/method rules                 │  │
+│  │  to policy scope)  │   │ - Semantic LLM Firewall (Intent blocks)  │  │
+│  └────────────────────┘   │ - Token budget enforcement               │  │
+│                           └────────────────────┬─────────────────────┘  │
+│                                                │                        │
+│  ┌─────────────────────────────────────────────▼─────────────────────┐  │
+│  │                     Universal Forwarder                           │  │
+│  │                                                                   │  │
+│  │   [ LLM Gateway Layer ]           [ Standard API Proxy ]          │  │
+│  │  OpenAI-compatible routing         GitHub, Stripe, Zendesk        │  │
+│  │  (LiteLLM architecture)                                           │  │
+│  └─────────────────────────────────────────────┬─────────────────────┘  │
+│                                                │                        │
+│  ┌─────────────────────────────────────────────▼─────────────────────┐  │
+│  │                 Sealed Audit Log (Tamper-evident)                 │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+                                     │
+                                     │ TLS to Upstream
+                                     ▼
+             api.openai.com / api.github.com / api.stripe.com
 ```
 
 ---
 
-## Components
+## ⚙️ Key Components
 
-### 1. Attested TLS Endpoint
+### 1. Attested TLS & Reproducible Builds
 
-The gateway exposes an HTTPS endpoint where TLS termination happens **inside the enclave**:
+CoCo generates its TLS keypair inside the enclave at startup. The public key is hashed into the hardware attestation report (`reportdata`). Before unlocking the portable vault, the user verifies the attestation quote, proving the binary matches the reproducible open-source build and the TLS connection is secure from MITM attacks.
+_(Vector: A3 | R4 | B2 | K4)_
 
-- The enclave generates its own TLS keypair at startup — the private key never exists outside the CVM
-- The public key is included in the attestation report (`reportdata` field)
-- The gateway's TLS certificate can be verified against the attestation report
-- Anyone connecting can confirm: "this TLS connection terminates inside the real enclave"
+### 2. Universal LLM Gateway Layer
 
-This provides **attestation-linked TLS**: the security of the connection is bound to the hardware root of trust, not just a CA signature.
+Instead of managing API keys for Claude, OpenAI, and Ollama, the agent points its `OPENAI_BASE_URL` to the CoCo Gateway. CoCo routes the request, injects the correct provider key from the unlocked vault, and enforces cross-provider token budgets.
 
-### 2. Agent Identity Gate
+### 3. Portable Encrypted Vaults
 
-Agents authenticate to the gateway using identity-based credentials (not hardware attestation):
+The biggest UX friction in agent deployments is key configuration. CoCo allows users to maintain a single encrypted vault file (e.g., `coco-vault.enc`). When spinning up a new CoCo instance on AWS Nitro or GCP TDX, the user provides the vault file and a decryption key. The enclave decrypts the vault into volatile memory. If the enclave reboots, the secrets are gone until unlocked again.
 
-- **Per-agent API key** — bearer token in the `Authorization` header, simple to issue and revoke
-- **mTLS client certificate** — stronger binding, cert issued per agent identity by the operator
+### 4. Semantic AI Firewall
 
-Each agent identity maps to a policy scope:
-- Agent A (CI bot) → can call GitHub APIs, read-only
-- Agent B (coding assistant) → can call GitHub APIs (read/write) + OpenAI
-- Agent C (support bot) → can call Zendesk APIs only
+Standard proxies block `/delete`. CoCo goes further. Using a lightweight local model or a trusted upstream call, the firewall evaluates the _payload intent_:
 
-Revocation is immediate: delete the API key or revoke the client cert.
+- **Fintech/DeFi:** "Deny uncollateralized loan API execution."
+- **DevOps:** "Block exfiltration of files matching `AWS_`."
+- **General:** "Limit context window to 10k tokens for identity `ci-bot`."
 
-### 3. Credential Vault
+### 5. Identity-Gated Agents
 
-- Credentials injected once at setup time via an attested operator channel
-- Stored encrypted, sealed to the enclave's hardware measurement (MRTD for TDX, MEASUREMENT for SEV-SNP)
-- Unsealed only inside the running enclave; never written in plaintext anywhere
-- Optionally backed by a remote KBS (Key Broker Service) for rotation support
-
-### 4. Policy Engine
-
-The policy engine enforces per-credential, per-operation, per-agent rules:
-
-```yaml
-credential: github-org
-provider: github
-base_url: https://api.github.com
-
-agents:
-  ci-bot:
-    rules:
-      - allow:
-          methods: [GET]
-          path_pattern: "/repos/**"
-      - deny:
-          methods: ["*"]
-          path_pattern: "/**"
-
-  coding-assistant:
-    rules:
-      - allow:
-          methods: [GET, POST, PATCH]
-          path_pattern: "/repos/**"
-      - allow:
-          methods: [POST]
-          path_pattern: "/repos/*/issues"
-      - deny:
-          methods: [DELETE]
-          path_pattern: "/**"
-      - deny:
-          path_pattern: "/repos/*/hooks/**"   # no webhook manipulation
-```
-
-Rules are evaluated in order, first match wins. Denied requests are logged and rejected with a 403 — the upstream API is never contacted.
-
-**Semantic extensions (future):**
-- Content inspection: reject requests whose body matches patterns (e.g., exfil via gist content)
-- Rate limiting per agent identity
-- Time-of-day restrictions
-- Cross-provider correlation (agent may not POST to GitHub and send email within the same 60s window)
-
-### 5. Forwarder
-
-- Rewrites the inbound agent request: strips gateway path prefix, injects `Authorization` header with the real credential
-- Forwards over TLS to the upstream provider
-- Streams response back to agent
-- Records request metadata (timestamp, agent identity, method, path, response code, bytes) to audit log
-
-### 6. Audit Log
-
-- Append-only log sealed inside the enclave
-- Exportable to operator via attested channel (signed by enclave key, verifiable externally)
-- Never contains credential values — only call metadata and agent identity
-- Enables post-incident forensics on agent behaviour
+Agents use simple "phantom tokens" (like Nono) or mTLS certs. If an agent goes rogue, the operator simply revokes the phantom token. The real upstream credentials (which might be shared across multiple agents) never need rotating.
 
 ---
 
-## Gateway Attestation
+## 🚀 Use Cases & Business Opportunities
 
-The gateway's value depends on operators and users being able to verify it before trusting it with credentials.
-
-### Verification Flow
-
-1. **Fetch attestation report** — the gateway exposes `/.well-known/attestation` returning its current TDX/SEV-SNP quote
-2. **Verify hardware signature** — confirm the quote is signed by the TEE's hardware root of trust (Intel TDX or AMD SEV-SNP)
-3. **Check measurements** — verify MRTD/PCR values match the expected (reproducibly built) gateway binary
-4. **Bind TLS to attestation** — the attestation report's `reportdata` contains the hash of the gateway's TLS public key; verify the cert you received matches
-
-### What This Proves
-
-When verification succeeds, you know:
-- The gateway binary running is exactly the one you expect (R4: reproducible build)
-- The TLS connection terminates inside that enclave (not a MITM)
-- Credentials injected into this gateway are sealed to hardware state and cannot be extracted
-- Policy enforcement happens inside the enclave boundary
-
-### Trust Model
-
-The **gateway** is the attested party. Operators verify it before injecting credentials. End users can verify it before trusting that their API calls are protected.
-
-Agents are **not** attested — they are identity-authenticated. The gateway cannot prove the agent binary is trustworthy. What it guarantees instead:
-- **Credentials never leave the enclave** — even a fully compromised agent cannot extract the raw API key
-- **Policy is enforced in hardware** — the agent cannot bypass restrictions even with full host access
-- **Every call is audited** — sealed, tamper-evident log of what every agent identity did
+- **Enterprise AI Rollouts:** Prevent "Shadow AI" credential leaks. Centralize auditing and token budgeting across hundreds of employee agents.
+- **Fintech & Web3:** Securely execute programmatic trading or unsecure loan issuance where the agent logic cannot be trusted with direct API access.
+- **Consumer Agent Portability:** Let users bring their own LLM subscriptions to any cloud agent platform (CrewAI, OpenClaw) without exposing their raw Anthropic/OpenAI keys to the platform provider.
 
 ---
 
-## Gateway API (Agent-facing)
+## 🔗 Code References & Reuse
 
-The agent hits the gateway exactly as it would hit the upstream API, with a path prefix:
-
-```
-https://gateway.example.com/gateway/{provider}/{upstream_path}
-```
-
-(The base URL is configurable per deployment — could be a public domain, a Tailscale hostname, or a WireGuard-internal address.)
-
-### Authentication
-
-Every request must include agent identity:
-
-```bash
-# API key authentication (bearer token)
-curl https://gateway.example.com/gateway/github/user/repos \
-  -H "Authorization: Bearer <agent-api-key>"
-
-# mTLS authentication (client cert)
-curl https://gateway.example.com/gateway/github/user/repos \
-  --cert agent.crt --key agent.key
-```
-
-### Examples
-
-```bash
-# GitHub — list repos
-curl https://gateway.example.com/gateway/github/user/repos \
-  -H "Authorization: Bearer $GATEWAY_API_KEY"
-
-# OpenAI — chat completion
-curl https://gateway.example.com/gateway/openai/v1/chat/completions \
-  -H "Authorization: Bearer $GATEWAY_API_KEY" \
-  -H "content-type: application/json" \
-  -d '{"model": "gpt-4o", "messages": [...]}'
-
-# ElevenLabs — TTS
-curl https://gateway.example.com/gateway/elevenlabs/v1/text-to-speech/{voice_id} \
-  -H "Authorization: Bearer $GATEWAY_API_KEY" \
-  -H "content-type: application/json" \
-  -d '{"text": "...", "model_id": "eleven_multilingual_v2"}'
-```
-
-No upstream API keys in the request. The gateway injects them. The agent's code is credential-free by design.
-
----
-
-## Setup Flow
-
-```
-Operator                Gateway CVM               KBS (optional)
-   │                        │                          │
-   │── fetch attestation ──►│                          │
-   │◄─ quote + TLS pubkey ──│                          │
-   │── verify quote ────────│                          │
-   │── verify TLS binding ──│                          │
-   │                        │                          │
-   │── inject credentials ─►│ (over attested TLS)     │
-   │                        │── seal to MRTD ──────────│
-   │                        │── store encrypted ───────│
-   │                        │                          │
-   │── deploy policy docs ─►│                          │
-   │                        │── load + compile rules ──│
-   │                        │                          │
-   │── issue agent API key ►│                          │
-   │   (or sign agent cert) │── store agent identity ──│
-   │                        │   + policy scope         │
-   │                        │                          │
-   [Gateway ready for agent calls]
-```
-
-### Agent Registration
-
-Each agent identity is:
-- A unique identifier (e.g., `ci-bot-prod`, `coding-assistant-alice`)
-- An authentication credential (API key or client cert)
-- A policy scope (which credentials it can use, which operations are allowed)
-
-Operators issue agent credentials via the attested channel, scoped to the minimum necessary policy set.
-
----
-
-## CoCo Vector
-
-Target deployment on bare-metal TDX or SEV-SNP (A3):
-
-```
-A3 | R4 | B2 | K4
-```
-
-- **A3** — direct silicon root of trust, no CSP paravisor
-- **R4** — gateway built reproducibly (Nix + Rust), anyone can verify binary matches source
-- **B2** — **gateway's TLS public key** hashed into attestation `reportdata`; verifier confirms TLS connection terminates inside the enclave
-- **K4** — credential release gated on exact gateway MRTD + operator verification of attestation
-
-Note: B2 applies to the **gateway**, not the agent. Agents are not in TEEs and cannot be hardware-attested. The binding is between the TLS endpoint and the enclave, not between the agent and the enclave.
-
-Cloud deployment (e.g., GCP TDX) is also viable at `A3[GCP TDX] | R4 | B2 | K4` with explicit CSP trust declared.
-
----
-
-## Implementation Plan
-
-### Phase 1 — Proof of Concept
-- [ ] Rust HTTPS server with TLS termination inside enclave
-- [ ] TLS keypair generated at startup, pubkey recorded for attestation binding
-- [ ] Single credential (GitHub token), hardcoded in config
-- [ ] Basic path-prefix routing and credential injection
-- [ ] API key authentication (simple bearer token validation)
-- [ ] Verify end-to-end: agent calls gateway over HTTPS, GitHub API responds
-
-### Phase 2 — Policy Engine
-- [ ] YAML policy document format + parser
-- [ ] Per-agent policy scoping
-- [ ] Rule evaluator (method + path pattern matching)
-- [ ] Deny logging
-- [ ] Unit test suite for policy evaluation
-
-### Phase 3 — Credential Vault
-- [ ] Encrypted credential store
-- [ ] Seal/unseal to TEE measurement (MRTD/PCR)
-- [ ] Attested operator injection channel
-- [ ] Credential rotation support
-
-### Phase 4 — Attestation Endpoint
-- [ ] `/.well-known/attestation` endpoint returning TDX/SEV-SNP quote
-- [ ] TLS pubkey hash included in quote's `reportdata`
-- [ ] Verification tooling for operators
-- [ ] Documentation for third-party verification
-
-### Phase 5 — Agent Identity Management
-- [ ] API key issuance, storage, revocation
-- [ ] mTLS client cert support (CA inside enclave)
-- [ ] Agent identity ↔ policy scope binding
-- [ ] Rate limiting per agent identity
-
-### Phase 6 — Audit + Hardening
-- [ ] Sealed append-only audit log with agent identity
-- [ ] Operator export via attested channel
-- [ ] Network egress lockdown (gateway only routes to allowlisted upstream domains)
-- [ ] Reproducible Nix build
-
----
-
-## Tech Stack
-
-- **Language:** Rust (memory safety, no GC pauses, excellent async HTTP with `hyper`/`axum`)
-- **Build:** Nix (reproducible, R4-capable)
-- **TEE:** Intel TDX (primary), AMD SEV-SNP (secondary)
-- **Attestation:** `tdx-attest` crate / `sev` crate
-- **TLS:** `rustls` with keypair generated inside enclave at startup
-- **Policy:** YAML config, compiled to rule tree at startup
-- **Crypto:** `ring` or `aws-lc-rs` for sealing primitives
-
----
-
-## Non-Goals (v1)
-
-- Hardware attestation of agents (agents are not in TEEs)
-- GUI / management console
-- Support for non-HTTP protocols (gRPC, SSH)
-- Federation between multiple gateway instances
-
----
-
-## Code References & Reuse
-
-### [`vkobel/enclave-tls-api-fetcher`](https://github.com/vkobel/enclave-tls-api-fetcher) - Primary reference
+### [`vkobel/enclave-tls-api-fetcher`](https://github.com/vkobel/enclave-tls-api-fetcher) — Primary reference
 
 A Nitro Enclave TLS fetcher with attestation, written in Rust. Large portions are directly reusable or adaptable:
 
@@ -398,26 +135,85 @@ A Nitro Enclave TLS fetcher with attestation, written in Rust. Large portions ar
 | `crates/enclave/src/vsock/` | Enclave↔host communication channel | Swap for TCP if not using vsock |
 | `crates/common/src/hpke.rs` | Attested operator injection channel | HPKE for credential bootstrap — reuse directly |
 | `crates/common/src/protocol.rs` | Request/response framing | Adapt to gateway API surface |
-| `crates/attestation-verifier/` | Attestation endpoint (Phase 4) | PCR/quote verification library — reuse, swap NSM for TDX/SEV-SNP |
+| `crates/attestation-verifier/` | Attestation endpoint (Phase 5) | PCR/quote verification library — reuse, swap NSM for TDX/SEV-SNP |
 | `crates/host-proxy/` | Agent-facing HTTPS API | Adapt: add API key/mTLS auth layer |
 
 **Key delta from this codebase:**
 - Add inbound TLS termination (HTTPS server inside enclave)
 - Replace AWS Nitro NSM attestation with Intel TDX / AMD SEV-SNP
-- Add Agent Identity Gate (API key + mTLS authentication)
-- Add Policy Engine (YAML rules, per-agent scoping)
+- Add Policy Engine (YAML rules, method + path matching)
 - Add Credential Vault (sealed encrypted store)
 
-**Estimated savings:** Phases 1 and 4 are significantly de-risked by this reference (~2–3 weeks of work reused).
+**Estimated savings:** Phases 1 and 5 are significantly de-risked by this reference (~2–3 weeks of work reused).
 
 ---
 
-## Related Work
+## 📚 Related Work & Inspirations
 
-- **exe.dev LLM Gateway** — inspiration for the proxy pattern; scoped to LLM providers, no attestation, no policy
-- **Phala Network tappd** — TEE-based secret management for Web3 workloads
-- **Practical CoCo Framework** — scoring framework for evaluating this deployment's verifiability posture
+CoCo stands on the shoulders of several excellent OSS projects, combining their concepts into a hardware-secured paradigm:
+
+1. **[Nono](https://github.com/lukehinds/nono):** The pioneer of the "phantom token" and local agent sandboxing pattern. CoCo takes Nono's credential injection and makes it remote, multi-tenant, and hardware-attested.
+2. **[LiteLLM](https://github.com/BerriAI/litellm):** The standard for OpenAI-compatible LLM routing. CoCo integrates this routing logic inside the TEE.
+3. **[Deepsecure](https://github.com/DeepTrail/deepsecure):** Reference for macaroons-based delegation and semantic policy scopes.
+4. **[Phala dstack & Kettle](https://github.com/Phala-Network/dstack):** Inspiration for TEE attestation flows and cloud CVM deployment patterns (Azure/GCP TDX).
 
 ---
 
-*Spec draft — April 2026*
+## 🛣️ Implementation Roadmap
+
+- **Phase 1 (PoC):** Rust HTTPS server in TDX/Nitro, terminating TLS in-enclave. Basic path-prefix routing and static token injection.
+- **Phase 2 (LLM Gateway):** Implement OpenAI-compatible endpoints (`/v1/chat/completions`) and token budget enforcement. Credentials are loaded from config files at this stage (vault comes in Phase 3).
+- **Phase 3 (Portable Vault):** Build the encrypted vault import/export logic and operator unlock channel. Replaces the config-file credentials from Phase 2.
+- **Phase 4 (Semantic Firewall):** Integrate intent-based blocking via lightweight embedded policy evaluation.
+- **Phase 5 (Audit & Attestation):** `/.well-known/attestation` endpoints, reproducible Nix builds, and tamper-evident logging.
+
+---
+
+## 🔍 Nono as a Foundation — Gap Analysis
+
+CoCo doesn't need to start from scratch. The [nono](https://github.com/lukehinds/nono) project's `nono-proxy` crate already implements several core CoCo primitives as a local sidecar. Below is an honest assessment of what transfers directly, what needs extending, and what's genuinely new.
+
+### Already Implemented in Nono
+
+| CoCo Concept              | Nono Implementation                                                                                         | Notes                                                               |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| **Phantom Token Pattern** | `nono-proxy/reverse.rs` — validates session token, strips it, injects real credential from keystore         | Multiple injection modes: header, URL path, query param, basic auth |
+| **Universal API Routing** | `nono-proxy/route.rs` — path-prefix routing (`/openai/...` → `api.openai.com`)                              | LLM and non-LLM APIs handled identically                            |
+| **L7 Endpoint Filtering** | `RouteStore` with per-route method+path rules (default-deny when configured)                                | Foundation for the AI Firewall's rule layer                         |
+| **Credential Backends**   | `keystore.rs` — macOS Keychain, Linux Secret Service, 1Password (`op://`), Apple Passwords, env vars, files | Secrets wrapped in `Zeroizing<String>`                              |
+| **Host Filtering**        | `net_filter.rs` — allowlists, hardcoded cloud metadata deny (169.254.x.x), DNS rebinding protection         | Non-overridable deny list                                           |
+| **Audit Logging**         | `SharedAuditLog` — session metadata capture per proxied request                                             | Needs tamper-evidence for CoCo                                      |
+| **Sandbox Isolation**     | Landlock (Linux) + Seatbelt (macOS) — agent network locked to proxy-only, filesystem restricted             | Prevents credential exfiltration at OS level                        |
+
+### Extending for CLI Tool Proxying (e.g., `gh`, `stripe`)
+
+CLI tools don't all use HTTP proxies. Three patterns to cover:
+
+1. **Env var injection (works today):** Tools like `gh` read `GH_TOKEN` from env. Nono's keystore loads secrets and injects them as env vars into the sandboxed process. The sandbox prevents exfiltration.
+
+2. **HTTP proxy mode (works today):** Tools respecting `HTTPS_PROXY` are routed through `nono-proxy` CONNECT tunneling or reverse proxy. Configure `HTTPS_PROXY=http://127.0.0.1:<port>` in the sandbox env.
+
+3. **Config file generation (gap):** Tools that read credentials from config files (e.g., `~/.config/gh/hosts.yml`) need a pre-exec step that writes a temp config with injected credentials inside the sandbox. This is a new capability to build — a config template system that resolves credential refs at launch time.
+
+### Gaps — What CoCo Must Build New
+
+| CoCo Feature                  | Gap                                                                                                       | Effort Estimate                                                  |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| **Remote network listener**   | Nono binds localhost only. CoCo needs authenticated remote access with TLS.                               | Medium — promote bind config, add client auth                    |
+| **TEE/CVM execution**         | Entirely new. In-enclave TLS termination, sealed memory, hardware attestation.                            | Large — platform-specific (Nitro, TDX, SEV-SNP)                  |
+| **Portable encrypted vaults** | Nono reads local keystores. CoCo needs exportable encrypted blobs sealed to hardware measurements (MRTD). | Large — new crypto layer + key derivation                        |
+| **Remote attestation**        | `/.well-known/attestation` endpoint, quote generation/verification, reproducible build hashes.            | Large — per-TEE-platform attestation flows                       |
+| **Semantic AI Firewall**      | Nono has path/method rules. CoCo wants LLM-evaluated intent blocking.                                     | Medium — new policy evaluation layer alongside existing L7 rules |
+| **Multi-tenancy**             | Nono is single-user. CoCo needs identity mapping, per-agent policy scopes, token budget tracking.         | Medium — extend existing session token to carry identity claims  |
+
+### Recommended Build Path
+
+1. **Extract `nono-proxy` into a standalone service.** It already runs as a separate unsandboxed process with its own async runtime. Minimal refactoring to make it independently deployable.
+2. **Add TLS termination + remote client auth.** Replace localhost-only binding with attested TLS. Session tokens become identity-bearing (JWT or macaroons).
+3. **Build the vault layer on top of existing keystore abstractions.** `CredentialStore` and `LoadedCredential` already handle multi-backend secret loading — wrap with encrypt/export/import.
+4. **Wrap in TEE runtime.** Deploy into Nitro/TDX CVM. Wire attestation report to TLS public key. Gate vault decryption on measurement verification.
+5. **Add semantic firewall as a new policy layer.** Sits alongside the existing `CompiledEndpointRules` in `RouteStore` — same hook point, richer evaluation.
+
+---
+
+_April 2026_
