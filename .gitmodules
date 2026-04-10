@@ -1,0 +1,3 @@
+[submodule "nono"]
+	path = nono
+	url = https://github.com/always-further/nono
