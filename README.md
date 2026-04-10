@@ -1,6 +1,6 @@
 # CoCo Credential Gateway
 
-> A TEE-hardened universal API & LLM credential proxy for AI agents, featuring portable vaults, semantic policy enforcement, and remote attestation.
+> A confidential, verifiable credential proxy for AI agents: phantom-token injection, policy enforcement, and attested execution inside a TEE.
 
 ---
 
@@ -15,21 +15,23 @@ AI agents require credentials to be useful — GitHub tokens, OpenAI API keys, p
    - **LLM Gateways (LiteLLM, OpenRouter):** Abstract LLM keys but lack hardware-level guarantees, don't cover non-LLM APIs (e.g., GitHub), and require trusting a third-party host.
    - **Local Sandboxes (Nono):** Great for local "phantom token" injection, but tied to a single machine's OS keychain with no remote attestation or cross-machine portability.
 
-**An agent that can make arbitrary API calls with injected credentials can still do harm, even if it never sees the raw key.** Without a robust, network-accessible, hardware-attested proxy, the agent remains the weakest link.
+**An agent that can make arbitrary API calls with injected credentials can still do harm, even if it never sees the raw key.** The right primitive is not "give the agent the secret more carefully." The right primitive is a **credential firewall**: a proxy that holds the real credentials, enforces policy at the request boundary, and is remotely verifiable.
 
 ---
 
 ## 💡 The Solution
 
-**CoCo Credential Gateway** is a remotely accessible credential proxy running inside a Confidential VM (CVM) or TEE (Intel TDX, AMD SEV-SNP, AWS Nitro). It acts as an **AI Firewall and Portable Vault**, intercepting agent requests, evaluating them against semantic policies, injecting the real credentials, and forwarding them to the upstream provider.
+**CoCo Credential Gateway** is a remotely accessible credential proxy running inside a Confidential VM (CVM) or TEE (Intel TDX, AMD SEV-SNP, AWS Nitro). It takes the local phantom-token pattern already proven by `nono` and promotes it into a **confidential, verifiable network service**: agents authenticate to CoCo with session or workload identity, CoCo injects the real upstream credential inside the enclave, and forwards the request without ever exposing the raw secret on the agent's host.
+
+The core thesis is intentionally narrower than "handle every auth shape for every tool." CoCo is first and foremost a **confidential reverse proxy for HTTP-facing agent credentials**: LLM providers, SaaS APIs, GitHub/GitLab/Stripe-style REST APIs, and OpenAI-compatible endpoints. Compatibility shims for non-HTTP-native tools are useful later, but they are not the defining primitive.
 
 ### Core Value Pillars
 
-1. **The "Phantom Token" Pattern, Elevated:** Agents authenticate to CoCo using identity-based session tokens. CoCo swaps these for the real API keys inside the enclave. The raw secrets _never_ touch the agent's host machine.
-2. **Universal LLM & API Routing:** Acts as a drop-in `BASE_URL` replacement. It provides an OpenAI-compatible endpoint for LLMs (integrating patterns from LiteLLM) _and_ standard proxying for REST APIs (GitHub, Stripe, etc.).
-3. **Portable Encrypted Vaults:** Users hold a master passphrase or hardware key. They can export their encrypted vault blob and drop it into any new CoCo instance. The vault only decrypts if the gateway's hardware attestation is verified.
-4. **Semantic AI Firewall:** Beyond basic method/path blocking, CoCo evaluates the _intent_ of a request (e.g., "Block any request attempting to delete a production repository" or "Block transactions over $5,000 unless initiated by identity `ops-lead`" in Fintech use cases).
-5. **Verifiable Hardware Trust:** Built reproducibly (Nix + Rust), terminating TLS _inside_ the enclave, with cryptographic proof of the gateway's integrity.
+1. **The "Phantom Token" Pattern, Elevated:** Agents authenticate to CoCo using identity-based session tokens or mTLS. CoCo swaps these for the real upstream credentials inside the enclave. The raw secrets _never_ touch the agent's host machine.
+2. **Confidential + Verifiable Execution:** TLS terminates inside the enclave. The gateway's public key is bound into the attestation evidence, so the operator can verify both the binary identity and the endpoint they are talking to.
+3. **HTTP-Native Credential Firewall:** CoCo acts as a drop-in `BASE_URL` replacement for LLMs and a standard reverse proxy for HTTP APIs. This is the main primitive, not an incidental transport.
+4. **Policy at the Request Boundary:** Method/path allowlists, identity scoping, endpoint-specific rules, token budgets, and later structured or semantic checks happen where the secret is actually used.
+5. **Portable Vaults as an Enabler, Not the Product:** Portable encrypted vaults make the service usable across machines and clouds, but the core product remains the confidential proxy boundary.
 
 ---
 
@@ -93,17 +95,19 @@ AI agents require credentials to be useful — GitHub tokens, OpenAI API keys, p
 CoCo generates its TLS keypair inside the enclave at startup. The public key is hashed into the hardware attestation report (`reportdata`). Before unlocking the portable vault, the user verifies the attestation quote, proving the binary matches the reproducible open-source build and the TLS connection is secure from MITM attacks.
 _(Vector: A3 | R4 | B2 | K4)_
 
-### 2. Universal LLM Gateway Layer
+### 2. Confidential Reverse Proxy Layer
 
-Instead of managing API keys for Claude, OpenAI, and Ollama, the agent points its `OPENAI_BASE_URL` to the CoCo Gateway. CoCo routes the request, injects the correct provider key from the unlocked vault, and enforces cross-provider token budgets.
+Instead of managing API keys for Claude, OpenAI, GitHub, Stripe, or internal REST services directly on the agent host, the agent points its `BASE_URL` or provider config to the CoCo Gateway. CoCo routes the request, injects the correct credential from the unlocked vault, and enforces policy before the request leaves the enclave.
+
+This is the most important scope clarification: CoCo is primarily an **attested reverse proxy**, not a generic secret-injection framework for every local CLI auth convention.
 
 ### 3. Portable Encrypted Vaults
 
 The biggest UX friction in agent deployments is key configuration. CoCo allows users to maintain a single encrypted vault file (e.g., `coco-vault.enc`). When spinning up a new CoCo instance on AWS Nitro or GCP TDX, the user provides the vault file and a decryption key. The enclave decrypts the vault into volatile memory. If the enclave reboots, the secrets are gone until unlocked again.
 
-### 4. Semantic AI Firewall
+### 4. Policy Engine
 
-Standard proxies block `/delete`. CoCo goes further. Using a lightweight local model or a trusted upstream call, the firewall evaluates the _payload intent_:
+Standard proxies block `/delete`. CoCo should start one layer earlier and simpler: enforce deterministic policy on method, path, identity, provider, and budget. A later phase can add deeper semantic checks using a lightweight local model or a trusted upstream call:
 
 - **Fintech/DeFi:** "Deny uncollateralized loan API execution."
 - **DevOps:** "Block exfiltration of files matching `AWS_`."
@@ -112,6 +116,31 @@ Standard proxies block `/delete`. CoCo goes further. Using a lightweight local m
 ### 5. Identity-Gated Agents
 
 Agents use simple "phantom tokens" (like Nono) or mTLS certs. If an agent goes rogue, the operator simply revokes the phantom token. The real upstream credentials (which might be shared across multiple agents) never need rotating.
+
+## 🎯 Scope Clarification
+
+The first and strongest version of CoCo is:
+
+- a **remote reverse proxy**
+- that holds the real credentials inside a TEE
+- that accepts only identity-bearing phantom tokens or mTLS-authenticated clients
+- that exposes provider-shaped HTTP endpoints to agents
+- and that can be cryptographically verified before it is trusted
+
+That means Pattern 1 from the POC note is not just "one option." It is the core product.
+
+For many agent workloads, that is already enough:
+
+- OpenAI and OpenAI-compatible APIs
+- Anthropic
+- GitHub REST / GraphQL
+- Stripe
+- Slack
+- Linear
+- Notion
+- internal HTTP services
+
+Compatibility layers for tools that only read env vars or config files may still be useful, but they are **secondary adapters**, not the main thesis. If a tool can be made to talk to a provider-shaped HTTP endpoint, CoCo should prefer that path.
 
 ---
 
@@ -161,10 +190,10 @@ CoCo stands on the shoulders of several excellent OSS projects, combining their 
 
 ## 🛣️ Implementation Roadmap
 
-- **Phase 1 (PoC):** Rust HTTPS server in TDX/Nitro, terminating TLS in-enclave. Basic path-prefix routing and static token injection.
-- **Phase 2 (LLM Gateway):** Implement OpenAI-compatible endpoints (`/v1/chat/completions`) and token budget enforcement. Credentials are loaded from config files at this stage (vault comes in Phase 3).
-- **Phase 3 (Portable Vault):** Build the encrypted vault import/export logic and operator unlock channel. Replaces the config-file credentials from Phase 2.
-- **Phase 4 (Semantic Firewall):** Integrate intent-based blocking via lightweight embedded policy evaluation.
+- **Phase 1 (PoC):** Rust HTTPS reverse proxy in TDX/Nitro, terminating TLS in-enclave. Basic path-prefix routing, phantom-token validation, and static credential injection for HTTP APIs.
+- **Phase 2 (Policy + Identity):** Add OpenAI-compatible endpoints, identity-bearing tokens or mTLS, deterministic method/path policy, and token budget enforcement.
+- **Phase 3 (Portable Vault):** Build the encrypted vault import/export logic and operator unlock channel. Replace static bootstrap credentials with an attested vault.
+- **Phase 4 (Compatibility Adapters):** Add optional wrappers for tools that cannot use provider-shaped HTTP endpoints directly.
 - **Phase 5 (Audit & Attestation):** `/.well-known/attestation` endpoints, reproducible Nix builds, and tamper-evident logging.
 
 ---
@@ -185,15 +214,29 @@ CoCo doesn't need to start from scratch. The [nono](https://github.com/lukehinds
 | **Audit Logging**         | `SharedAuditLog` — session metadata capture per proxied request                                             | Needs tamper-evidence for CoCo                                      |
 | **Sandbox Isolation**     | Landlock (Linux) + Seatbelt (macOS) — agent network locked to proxy-only, filesystem restricted             | Prevents credential exfiltration at OS level                        |
 
-### Extending for CLI Tool Proxying (e.g., `gh`, `stripe`)
+### What This Proves About CoCo's Core Primitive
 
-CLI tools don't all use HTTP proxies. Three patterns to cover:
+`nono` already proves the local version of the design I actually care about:
 
-1. **Env var injection (works today):** Tools like `gh` read `GH_TOKEN` from env. Nono's keystore loads secrets and injects them as env vars into the sandboxed process. The sandbox prevents exfiltration.
+1. the agent talks to a local provider-shaped HTTP endpoint
+2. the agent holds only a phantom token, not the real secret
+3. the proxy validates the phantom token and injects the real credential
+4. the proxy can enforce per-endpoint policy before forwarding upstream
 
-2. **HTTP proxy mode (works today):** Tools respecting `HTTPS_PROXY` are routed through `nono-proxy` CONNECT tunneling or reverse proxy. Configure `HTTPS_PROXY=http://127.0.0.1:<port>` in the sandbox env.
+That means the main CoCo delta is not inventing a new credential pattern. It is making this pattern:
 
-3. **Config file generation (gap):** Tools that read credentials from config files (e.g., `~/.config/gh/hosts.yml`) need a pre-exec step that writes a temp config with injected credentials inside the sandbox. This is a new capability to build — a config template system that resolves credential refs at launch time.
+- remote instead of localhost-only
+- attested instead of host-trust-based
+- identity-aware instead of single-user
+- portable instead of tied to one machine's keychain
+
+### Secondary Compatibility Paths
+
+For completeness: not every tool is naturally provider-shaped or HTTP-native. Some still rely on env vars, HTTP proxy settings, or config files. Those paths may still matter for adoption, but they are secondary to the core proxy thesis.
+
+- **Env var injection:** Works today in `nono`, but it is weaker because the secret enters the process environment.
+- **HTTP proxy mode:** Works today for proxy-aware tools, but it is less expressive than service-specific reverse proxying.
+- **Config file generation:** Still a gap and still weaker than phantom-token reverse proxying because the real credential becomes locally readable.
 
 ### Gaps — What CoCo Must Build New
 
@@ -209,10 +252,11 @@ CLI tools don't all use HTTP proxies. Three patterns to cover:
 ### Recommended Build Path
 
 1. **Extract `nono-proxy` into a standalone service.** It already runs as a separate unsandboxed process with its own async runtime. Minimal refactoring to make it independently deployable.
-2. **Add TLS termination + remote client auth.** Replace localhost-only binding with attested TLS. Session tokens become identity-bearing (JWT or macaroons).
-3. **Build the vault layer on top of existing keystore abstractions.** `CredentialStore` and `LoadedCredential` already handle multi-backend secret loading — wrap with encrypt/export/import.
-4. **Wrap in TEE runtime.** Deploy into Nitro/TDX CVM. Wire attestation report to TLS public key. Gate vault decryption on measurement verification.
-5. **Add semantic firewall as a new policy layer.** Sits alongside the existing `CompiledEndpointRules` in `RouteStore` — same hook point, richer evaluation.
+2. **Add TLS termination + remote client auth.** Replace localhost-only binding with attested TLS. Session tokens become identity-bearing (JWT, macaroons, or mTLS-backed identities).
+3. **Keep the reverse-proxy data plane as the product core.** Do not widen the first version into every CLI auth shape. Optimize for HTTP-facing agent credentials first.
+4. **Build the vault layer on top of existing keystore abstractions.** `CredentialStore` and `LoadedCredential` already handle multi-backend secret loading — wrap with encrypt/export/import.
+5. **Wrap in TEE runtime.** Deploy into Nitro/TDX CVM. Wire attestation report to TLS public key. Gate vault decryption on measurement verification.
+6. **Add richer policy only after the core proxy is proven.** Start with deterministic endpoint policy; add semantic evaluation later if it proves necessary.
 
 ---
 
