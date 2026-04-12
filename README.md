@@ -57,7 +57,34 @@ Built on [`nono-proxy`](./nono) (phantom token pattern + reverse proxy core), pr
 ## Milestones
 
 ### Phase 1 — POC (current)
-Standalone `coco-gateway` binary running on Phala Cloud TDX. Phantom token auth, multi-provider routing, credential injection from env, raw TDX attestation quote at `GET /attest`. Proves the end-to-end flow: agent → CVM → upstream, real key never leaving the enclave.
+
+Proves the end-to-end flow: agent → CVM → upstream, real key never leaving the enclave.
+
+Delivered in two steps:
+
+**Path B — Standalone gateway (ship first)**
+A new `coco-gateway` Rust binary that uses `nono-proxy` as a Cargo library dependency. Composes its individual modules (`RouteStore`, `reverse`, `credential`, `token::constant_time_eq`) inside a custom Axum server — does not use `nono_proxy::start()` since that forces ephemeral token generation incompatible with the remote pre-shared token model.
+- Binds to `0.0.0.0:8080`, deployed on Phala Cloud TDX via Docker Compose
+- Phantom token loaded from `COCO_PHANTOM_TOKEN` env var (Phala encrypted secrets); agents authenticate via `Proxy-Authorization: Bearer <token>`
+- Routes `/openai/`, `/anthropic/`, `/github/` path prefixes to their respective upstreams; strips phantom token, injects real credential from env
+- `GET /attest` returns raw TDX DCAP QuoteV4 via Phala's `tappd` sidecar
+- **Known gap:** agents route through CoCo voluntarily via `BASE_URL` — no kernel-level egress enforcement. A compromised agent can bypass the gateway. Mitigate with cloud egress firewall rules; Path C closes this properly.
+
+**Path C — nono fork with client-side attestation (target architecture)**
+Fork nono into a workspace that includes `coco-gateway` as a crate alongside the existing CLI. The `nono` CLI gains a `--coco <url>` flag that:
+1. Fetches and verifies the CVM's TDX attestation quote before anything else
+2. Spawns the sandboxed child process with `NetworkMode::ProxyOnly` pointing at the remote CVM
+
+This restores kernel-level Landlock egress enforcement and bakes attestation verification into the client, closing the two main POC gaps.
+
+```
+nono fork workspace:
+  crates/
+    nono-cli/      ← add --coco flag + attestation verification
+    nono-proxy/    ← unchanged
+    nono/          ← unchanged
+    coco-gateway/  ← new: CVM binary (promoted from Path B)
+```
 
 See [`openspec/changes/poc-v1-coco-creds-gateway/`](./openspec/changes/poc-v1-coco-creds-gateway/) for full spec and tasks.
 
