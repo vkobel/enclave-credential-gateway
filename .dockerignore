@@ -1,0 +1,9 @@
+nono/
+.git/
+target/
+openspec/
+.claude/
+*.md
+.env
+.env.*
+docker-compose*.yml

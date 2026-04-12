@@ -1,0 +1,12 @@
+# Rust
+target/
+
+# Environment / secrets
+.env
+*.env
+
+# Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

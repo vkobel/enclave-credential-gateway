@@ -1,0 +1,22 @@
+{
+  "routes": {
+    "openai": {
+      "upstream": "https://api.openai.com",
+      "credential_env": "OPENAI_API_KEY"
+    },
+    "anthropic": {
+      "upstream": "https://api.anthropic.com",
+      "credential_env": "ANTHROPIC_API_KEY",
+      "inject_header": "x-api-key",
+      "credential_format": "{}"
+    },
+    "github": {
+      "upstream": "https://api.github.com",
+      "credential_env": "GITHUB_TOKEN"
+    },
+    "httpbin": {
+      "upstream": "https://httpbin.org",
+      "credential_env": "HTTPBIN_TOKEN"
+    }
+  }
+}

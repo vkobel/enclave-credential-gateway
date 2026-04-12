@@ -1,0 +1,28 @@
+[package]
+name = "coco-gateway"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "coco-gateway"
+path = "src/main.rs"
+
+[dependencies]
+nono-proxy = { git = "https://github.com/always-further/nono", rev = "98b140f782550b6c47766e2e8e49224f070bbc4e", package = "nono-proxy" }
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+hyper = { version = "1", features = ["http1", "client"] }
+hyper-rustls = { version = "0.27", features = ["http1", "ring", "webpki-tokio"] }
+hyper-util = { version = "0.1", features = ["tokio", "client-legacy"] }
+http-body-util = "0.1"
+tower-http = { version = "0.6", features = ["trace"] }
+rustls = { version = "0.23", features = ["ring"] }
+webpki-roots = "1"
+zeroize = "1"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+subtle = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+base64 = "0.22"

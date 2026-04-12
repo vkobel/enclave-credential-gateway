@@ -1,115 +1,133 @@
 # CoCo Credential Gateway
 
-A confidential credential proxy for AI agents. Agents authenticate with a phantom token; the gateway holds and injects the real upstream credentials inside a hardware TEE — the raw secrets never touch the agent's host.
+A credential proxy for AI agents: agents authenticate with a phantom token, the gateway validates it and injects the real upstream API key, so secrets never touch the agent's host.
 
-Built on [`nono-proxy`](./nono) (phantom token pattern + reverse proxy core), promoted into a remotely accessible, hardware-attested network service.
-
----
-
-## What It Does
-
-- Agents point their `BASE_URL` at the CVM gateway instead of directly at OpenAI, Anthropic, GitHub, etc.
-- The gateway validates the phantom token, strips it, injects the real API key from in-enclave secrets, and forwards the request
-- A `GET /attest` endpoint returns a raw TDX attestation quote so operators can verify the binary running inside the enclave
-- Real credentials never leave the enclave; if an agent is compromised, rotate the phantom token — the upstream keys stay untouched
+Built on [`nono-proxy`](./nono) — promoted into a remotely deployable, hardware-attested service.
 
 ---
 
-## Architecture
+## Quickstart
 
-```text
-┌─────────────────────────────────────────────────────────┐
-│                     Agent (any platform)                │
-│  config: BASE_URL = https://<cvm-host>/openai           │
-│          PHANTOM_TOKEN = <64-char hex token>            │
-└────────────────────────┬────────────────────────────────┘
-                         │ HTTPS + Proxy-Authorization: Bearer <phantom-token>
-                         ▼
-              [ Phala Edge — TLS Termination ]
-                         │ HTTP (internal CVM network)
-                         ▼
-┌─────────────────────────────────────────────────────────┐
-│               Phala Cloud TDX CVM                       │
-│                                                         │
-│  ┌───────────────────────────────────────────────────┐  │
-│  │              coco-gateway (Docker container)      │  │
-│  │                                                   │  │
-│  │  Phantom Token Validator (constant-time)          │  │
-│  │       │                                           │  │
-│  │  Route Dispatcher  /openai/ /anthropic/ /github/  │  │
-│  │       │                                           │  │
-│  │  Credential Injector (strips phantom, injects     │  │
-│  │  real key from env)                               │  │
-│  │       │                                           │  │
-│  │  GET /attest → raw TDX QuoteV4                    │  │
-│  │                                                   │  │
-│  │  Secrets (Phala KMS → env vars inside enclave):   │  │
-│  │    COCO_PHANTOM_TOKEN, OPENAI_API_KEY, ...        │  │
-│  └───────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
-                         │ TLS outbound (rustls)
-                         ▼
-          api.openai.com / api.anthropic.com / api.github.com
+**1. Generate a phantom token** — this is the shared secret your agents will use as their API key:
+
+```bash
+export COCO_PHANTOM_TOKEN=$(openssl rand -hex 32)
+echo $COCO_PHANTOM_TOKEN   # save this, you'll pass it to agents
 ```
+
+**2. Set your upstream credentials** and start the gateway:
+
+```bash
+export OPENAI_API_KEY=sk-...
+export ANTHROPIC_API_KEY=sk-ant-...
+export GITHUB_TOKEN=ghp_...
+export HTTPBIN_TOKEN=any-value   # dummy value works for smoke-testing
+
+docker compose up -d --build
+```
+
+Routes are loaded from [`examples/profile.json`](./examples/profile.json) — edit it to add or remove upstreams.
+
+**3. Call any upstream through the gateway** — real keys never leave the gateway:
+
+```bash
+# httpbin — good smoke test, no real credential needed
+curl http://localhost:8080/httpbin/bearer \
+  -H "Proxy-Authorization: Bearer $COCO_PHANTOM_TOKEN"
+# → {"authenticated": true, "token": "any-value"}
+
+# OpenAI — agents set OPENAI_BASE_URL=http://localhost:8080/openai/v1
+curl -X POST http://localhost:8080/openai/v1/chat/completions \
+  -H "Proxy-Authorization: Bearer $COCO_PHANTOM_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"ping"}]}'
+
+# Anthropic
+curl -X POST http://localhost:8080/anthropic/v1/messages \
+  -H "Proxy-Authorization: Bearer $COCO_PHANTOM_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{"model":"claude-haiku-4-5-20251001","max_tokens":64,"messages":[{"role":"user","content":"ping"}]}'
+```
+
+The gateway returns `407` on a missing/wrong phantom token, `404` on an unknown prefix, `503` if the upstream credential env var is absent.
+
+---
+
+## Custom Profiles
+
+Routes are defined in [`examples/profile.json`](./examples/profile.json) and mounted into the container by `docker-compose.yml`. Edit that file to add any upstream:
+
+```json
+{
+  "routes": {
+    "httpbin": {
+      "upstream": "https://httpbin.org",
+      "credential_env": "HTTPBIN_TOKEN"
+    },
+    "openai": {
+      "upstream": "https://api.openai.com",
+      "credential_env": "OPENAI_API_KEY"
+    }
+  }
+}
+```
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `upstream` | yes | — | HTTPS upstream base URL |
+| `credential_env` | yes | — | Env var holding the real credential |
+| `inject_header` | no | `Authorization` | Header name to inject the credential into |
+| `credential_format` | no | `Bearer {}` | Format string; `{}` is replaced with the credential |
+
+After editing the profile, restart with `docker compose up -d --build`. Override the profile path with `COCO_PROFILE=/custom/path.json`.
+
+---
+
+## How It Works
+
+```
+Agent  ──Proxy-Authorization: Bearer <phantom>──▶  coco-gateway
+                                                        │
+                                              validate token (constant-time)
+                                                        │
+                                              match /<prefix>/ → upstream
+                                                        │
+                                              strip phantom, inject real key
+                                                        │
+                                                        ▼
+                                           api.openai.com (TLS, rustls)
+```
+
+**Known gap (POC):** Agents route through the gateway voluntarily via `BASE_URL`. A compromised agent can bypass by connecting directly to the upstream. Mitigate with egress firewall rules. Path C (nono fork + Landlock enforcement) closes this properly.
+
+---
+
+## Configuration
+
+| Env var | Required | Default | Description |
+|---|---|---|---|
+| `COCO_PHANTOM_TOKEN` | yes | — | Shared secret agents use as their API key |
+| `COCO_LISTEN_PORT` | no | `8080` | Port to bind |
+| `COCO_PROFILE` | no | `/etc/coco/profile.json` | Profile file path |
 
 ---
 
 ## Milestones
 
-### Phase 1 — POC (current)
+**Phase 1a (current) — Plain infrastructure POC**
+`coco-gateway` binary on any Docker host. Proves the proxy data plane end-to-end.
 
-Proves the end-to-end flow: agent → CVM → upstream, real key never leaving the enclave.
+**Phase 1b — CVM attestation**
+Promote to Phala Cloud TDX CVM. Add `GET /attest` (raw TDX QuoteV4 via `tappd` sidecar).
 
-Delivered in two steps:
-
-**Path B — Standalone gateway (ship first)**
-A new `coco-gateway` Rust binary that uses `nono-proxy` as a Cargo library dependency. Composes its individual modules (`RouteStore`, `reverse`, `credential`, `token::constant_time_eq`) inside a custom Axum server — does not use `nono_proxy::start()` since that forces ephemeral token generation incompatible with the remote pre-shared token model.
-- Binds to `0.0.0.0:8080`, deployed on Phala Cloud TDX via Docker Compose
-- Phantom token loaded from `COCO_PHANTOM_TOKEN` env var (Phala encrypted secrets); agents authenticate via `Proxy-Authorization: Bearer <token>`
-- Routes `/openai/`, `/anthropic/`, `/github/` path prefixes to their respective upstreams; strips phantom token, injects real credential from env
-- `GET /attest` returns raw TDX DCAP QuoteV4 via Phala's `tappd` sidecar
-- **Known gap:** agents route through CoCo voluntarily via `BASE_URL` — no kernel-level egress enforcement. A compromised agent can bypass the gateway. Mitigate with cloud egress firewall rules; Path C closes this properly.
-
-**Path C — nono fork with client-side attestation (target architecture)**
-Fork nono into a workspace that includes `coco-gateway` as a crate alongside the existing CLI. The `nono` CLI gains a `--coco <url>` flag that:
-1. Fetches and verifies the CVM's TDX attestation quote before anything else
-2. Spawns the sandboxed child process with `NetworkMode::ProxyOnly` pointing at the remote CVM
-
-This restores kernel-level Landlock egress enforcement and bakes attestation verification into the client, closing the two main POC gaps.
-
-```
-nono fork workspace:
-  crates/
-    nono-cli/      ← add --coco flag + attestation verification
-    nono-proxy/    ← unchanged
-    nono/          ← unchanged
-    coco-gateway/  ← new: CVM binary (promoted from Path B)
-```
-
-See [`openspec/changes/poc-v1-coco-creds-gateway/`](./openspec/changes/poc-v1-coco-creds-gateway/) for full spec and tasks.
-
-### Phase 2 — Policy + Identity
-OpenAI-compatible endpoints, identity-bearing tokens or mTLS, deterministic method/path policy enforcement, per-agent token budget tracking.
-
-### Phase 3 — Portable Encrypted Vaults
-Encrypted vault file (`coco-vault.enc`) sealed to the TDX measurement (`MRTD`). Decrypts only if the exact binary version is running — wrong binary, wrong key derivation, vault stays locked. Replaces Phala secret injection as the credential distribution primitive and makes the gateway platform-portable.
-
-### Phase 4 — Compatibility Adapters
-Optional wrappers for tools that cannot use provider-shaped HTTP endpoints: env var injection, HTTP proxy mode, config file generation. Secondary to the core proxy thesis.
-
-### Phase 5 — Audit & Attestation
-`/.well-known/attestation` endpoint, TLS public key bound into the attestation quote (attested TLS), reproducible Nix builds, tamper-evident audit log.
+**Phase 2+ — Policy, identity, encrypted vaults, audit**
+See [`openspec/`](./openspec) for specs and task lists.
 
 ---
 
 ## References
 
-- [`nono/`](./nono) — nono-proxy source (phantom token pattern, route store, credential injection, host filtering)
-- [`openspec/`](./openspec) — specs, design docs, and task lists
+- [`nono/`](./nono) — nono-proxy (phantom token pattern, route store, credential injection)
+- [`openspec/`](./openspec) — specs, design docs, task lists
 - [Phala Cloud](https://phala.network) — TDX CVM deployment platform
-- [`lunal-dev/attestation-rs`](https://github.com/lunal-dev/attestation-rs) — TDX quote generation library
-- [`vkobel/enclave-tls-api-fetcher`](https://github.com/vkobel/enclave-tls-api-fetcher) — TLS-in-enclave reference implementation
-
----
-
-_April 2026_
