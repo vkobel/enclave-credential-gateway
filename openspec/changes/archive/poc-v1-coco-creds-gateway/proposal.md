@@ -4,12 +4,24 @@
 
 ## What Changes
 
-- **New binary `coco-gateway`:** A standalone HTTPS reverse proxy built on `nono-proxy` as a Cargo git library dependency, bound to `0.0.0.0:8080`, loading the phantom token and upstream credentials from environment variables injected by Phala's encrypted secret mechanism. Composes nono-proxy's individual modules (`RouteStore`, `reverse`, `credential`, `token::constant_time_eq`) inside a custom Axum server — does not use `nono_proxy::start()` since it forces ephemeral token generation incompatible with the pre-shared remote token model.
+The POC is delivered in two sequential phases to reduce debugging surface and allow earlier validation of the core proxy logic.
+
+### Phase 1a — Proxy on Plain Infrastructure
+
+Proves the gateway data plane on any machine before touching TEE-specific tooling:
+
+- **New binary `coco-gateway`:** A standalone reverse proxy built on `nono-proxy` as a Cargo git library dependency, bound to `0.0.0.0:8080`, loading the phantom token and upstream credentials from env vars. Composes nono-proxy's individual modules (`RouteStore`, `reverse`, `credential`, `token::constant_time_eq`) inside a custom Axum server — does not use `nono_proxy::start()` since it forces ephemeral token generation incompatible with the pre-shared remote token model.
 - **Phantom token validation (remote):** `COCO_PHANTOM_TOKEN` is a pre-shared 64-char hex token loaded at startup; agents include it in `Proxy-Authorization: Bearer <token>` (or `Basic` format) on every request. Validated with constant-time comparison via `nono_proxy::token::constant_time_eq`.
 - **Route dispatching:** Path-prefix routing (`/openai/` → `api.openai.com`, `/anthropic/` → `api.anthropic.com`, `/github/` → `api.github.com`) via `nono-proxy`'s `RouteStore` and `RouteConfig`.
 - **Credential injection:** Strips the phantom token header, injects `Authorization: Bearer <UPSTREAM_KEY>` from env vars before forwarding. Reuses `nono_proxy::reverse` and `nono_proxy::credential` modules directly.
-- **`GET /attest` endpoint:** Returns the raw TDX DCAP QuoteV4 as JSON `{ "quote": "<hex>", "platform": "tdx" }` using `lunal-dev/attestation-rs`. Asserts debug bit is unset.
-- **Docker Compose deployment on Phala Cloud:** Single-container deployment with secrets set via Phala CLI before launch.
+- **Docker Compose packaging:** Single-container deployment runnable with `docker compose up` on any machine (local laptop, plain VM). No Phala or TEE dependencies.
+
+### Phase 1b — CVM Deployment and Attestation
+
+Promotes the proven binary to a Phala Cloud TDX CVM and adds the TEE-specific layer:
+
+- **`GET /attest` endpoint:** Returns the raw TDX DCAP QuoteV4 as JSON `{ "quote": "<hex>", "platform": "tdx" }` via Phala's `tappd` sidecar. Returns `503` when tappd is unreachable (local dev / non-Phala environment). Asserts debug bit is unset.
+- **Phala Cloud deployment:** Secrets provisioned via `phala cvms secrets set`; image published to GHCR via GitHub Actions and deployed via Docker Compose on Phala.
 
 ## Capabilities
 
