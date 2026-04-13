@@ -141,25 +141,46 @@ else
 fi
 
 # ── Test: anthropic ───────────────────────────────────────────────────────────
+# The gateway accepts ANTHROPIC_API_KEY in two shapes and routes accordingly:
+#   - sk-ant-oat... (Claude Code OAuth) → injected as Authorization: Bearer
+#                                          (phantom sent same way; client must
+#                                           also include `anthropic-beta: oauth-...`)
+#   - sk-ant-api... (regular API key)   → injected as x-api-key
+# We pick the right test based on the token prefix so we can prove the
+# end-to-end path actually works against api.anthropic.com.
 section "Route: anthropic"
 
-if [[ -z "${ANTHROPIC_AUTH_TOKEN:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
-  skip "ANTHROPIC_AUTH_TOKEN and ANTHROPIC_API_KEY not set — skipping Anthropic tests"
-else
-  # Determine which credential is active and which phantom auth header to use.
-  # Mirrors the gateway's credential_sources priority: OAuth first, then API key.
-  if [[ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
-    ANTHROPIC_PHANTOM_HEADER="Authorization"
-    ANTHROPIC_PHANTOM_VALUE="Bearer ${COCO_PHANTOM_TOKEN}"
-  else
-    ANTHROPIC_PHANTOM_HEADER="x-api-key"
-    ANTHROPIC_PHANTOM_VALUE="${COCO_PHANTOM_TOKEN}"
-  fi
-
-  # Send a minimal messages request (claude-haiku-4-5 is the cheapest model)
+if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+  skip "ANTHROPIC_API_KEY not set — skipping Anthropic test"
+elif [[ "${COCO_TEST_ANTHROPIC_MODE:-apikey}" == "oauth" ]]; then
+  info "COCO_TEST_ANTHROPIC_MODE=oauth — testing Claude Code OAuth (Authorization: Bearer) path"
   GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
     -X POST "http://localhost:${GATEWAY_PORT}/anthropic/v1/messages" \
-    -H "${ANTHROPIC_PHANTOM_HEADER}: ${ANTHROPIC_PHANTOM_VALUE}" \
+    -H "Authorization: Bearer ${COCO_PHANTOM_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -H "anthropic-version: 2023-06-01" \
+    -H "anthropic-beta: oauth-2025-04-20" \
+    -d '{
+      "model": "claude-haiku-4-5-20251001",
+      "max_tokens": 8,
+      "system": [{"type": "text", "text": "You are Claude Code, Anthropics official CLI for Claude."}],
+      "messages": [{"role": "user", "content": "Reply: OK"}]
+    }' 2>/dev/null)
+  GW_BODY=$(cat "$GW_TMPFILE")
+
+  [[ "$GW_STATUS" == "200" ]] \
+    && pass "Claude Code OAuth path reached Anthropic (200)" \
+    || { fail "Anthropic OAuth request failed — status $GW_STATUS"; echo "    Body: $(echo "$GW_BODY" | head -3)"; }
+
+  content_len=$(echo "$GW_BODY" | jq -r '.content | length' 2>/dev/null || echo 0)
+  [[ "$content_len" -ge 1 ]] \
+    && pass "Response has content ($content_len block(s))" \
+    || fail "Response missing content field"
+else
+  info "Testing regular API key (x-api-key) path — set COCO_TEST_ANTHROPIC_MODE=oauth for Claude Code OAuth"
+  GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
+    -X POST "http://localhost:${GATEWAY_PORT}/anthropic/v1/messages" \
+    -H "x-api-key: ${COCO_PHANTOM_TOKEN}" \
     -H "Content-Type: application/json" \
     -H "anthropic-version: 2023-06-01" \
     -d '{
@@ -170,8 +191,8 @@ else
   GW_BODY=$(cat "$GW_TMPFILE")
 
   [[ "$GW_STATUS" == "200" ]] \
-    && pass "Request reached Anthropic (200)" \
-    || { fail "Anthropic request failed — status $GW_STATUS"; echo "    Body: $(echo "$GW_BODY" | head -3)"; }
+    && pass "API key path reached Anthropic (200)" \
+    || { fail "Anthropic API key request failed — status $GW_STATUS"; echo "    Body: $(echo "$GW_BODY" | head -3)"; }
 
   content_len=$(echo "$GW_BODY" | jq -r '.content | length' 2>/dev/null || echo 0)
   [[ "$content_len" -ge 1 ]] \

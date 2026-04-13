@@ -21,9 +21,9 @@
 //!
 //! ## Claude Code local flow
 //!
-//!   # Gateway side (has real credentials)
+//!   # Gateway side (has the real Anthropic API key)
 //!   export COCO_PHANTOM_TOKEN=my-secret
-//!   export ANTHROPIC_AUTH_TOKEN=sk-ant-oat01-...  # OR ANTHROPIC_API_KEY=sk-ant-...
+//!   export ANTHROPIC_API_KEY=sk-ant-...
 //!   docker compose up -d
 //!
 //!   # Claude Code side (no real credentials)
@@ -60,6 +60,11 @@ pub struct CredentialSource {
     pub inject_header: String,
     #[serde(default = "default_credential_format")]
     pub format: String,
+    /// Optional value prefix; this source only matches if the env value starts with it.
+    /// Lets one env var (e.g. ANTHROPIC_API_KEY) route to different headers based on
+    /// token shape (sk-ant-oat... → Authorization: Bearer; sk-ant-api... → x-api-key).
+    #[serde(default)]
+    pub prefix: Option<String>,
 }
 
 fn default_inject_header() -> String {
@@ -115,6 +120,7 @@ impl RouteEntry {
                 env,
                 inject_header: route.inject_header,
                 format: route.credential_format,
+                prefix: None,
             }]
         } else {
             vec![]
@@ -177,6 +183,7 @@ fn builtin_routes() -> Vec<(String, RouteEntry)> {
                     env: "OPENAI_API_KEY".to_string(),
                     inject_header: "Authorization".to_string(),
                     format: "Bearer {}".to_string(),
+                    prefix: None,
                 }],
             },
         ),
@@ -184,20 +191,18 @@ fn builtin_routes() -> Vec<(String, RouteEntry)> {
             "anthropic".to_string(),
             RouteEntry {
                 upstream: "https://api.anthropic.com".to_string(),
-                // OAuth token (ANTHROPIC_AUTH_TOKEN) takes precedence over API key.
-                // The client chooses which phantom header to send:
-                //   OAuth flow:    Authorization: Bearer <phantom>
-                //   API key flow:  x-api-key: <phantom>
                 credential_sources: vec![
                     CredentialSource {
-                        env: "ANTHROPIC_AUTH_TOKEN".to_string(),
+                        env: "ANTHROPIC_API_KEY".to_string(),
                         inject_header: "Authorization".to_string(),
                         format: "Bearer {}".to_string(),
+                        prefix: Some("sk-ant-oat".to_string()),
                     },
                     CredentialSource {
                         env: "ANTHROPIC_API_KEY".to_string(),
                         inject_header: "x-api-key".to_string(),
                         format: "{}".to_string(),
+                        prefix: None,
                     },
                 ],
             },
@@ -210,6 +215,7 @@ fn builtin_routes() -> Vec<(String, RouteEntry)> {
                     env: "GITHUB_TOKEN".to_string(),
                     inject_header: "Authorization".to_string(),
                     format: "Bearer {}".to_string(),
+                    prefix: None,
                 }],
             },
         ),
@@ -221,6 +227,7 @@ fn builtin_routes() -> Vec<(String, RouteEntry)> {
                     env: "HTTPBIN_TOKEN".to_string(),
                     inject_header: "Authorization".to_string(),
                     format: "Bearer {}".to_string(),
+                    prefix: None,
                 }],
             },
         ),
@@ -498,18 +505,22 @@ fn resolve_credential(
     sources: &[CredentialSource],
     preferred: Option<usize>,
 ) -> Option<(&CredentialSource, String)> {
+    let matches = |src: &CredentialSource, v: &str| -> bool {
+        !v.is_empty() && src.prefix.as_deref().is_none_or(|p| v.starts_with(p))
+    };
+
     // Try preferred source first
     if let Some(i) = preferred {
         if let Some(src) = sources.get(i) {
             if let Ok(v) = std::env::var(&src.env) {
-                if !v.is_empty() {
+                if matches(src, &v) {
                     return Some((src, v));
                 }
             }
         }
     }
-    // Fall through to first available source
+    // Fall through to first matching source
     sources.iter().find_map(|src| {
-        std::env::var(&src.env).ok().filter(|v| !v.is_empty()).map(|v| (src, v))
+        std::env::var(&src.env).ok().filter(|v| matches(src, v)).map(|v| (src, v))
     })
 }

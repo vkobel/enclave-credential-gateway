@@ -7,8 +7,8 @@
     "anthropic": {
       "upstream": "https://api.anthropic.com",
       "credential_sources": [
-        {"env": "ANTHROPIC_AUTH_TOKEN", "inject_header": "Authorization", "format": "Bearer {}"},
-        {"env": "ANTHROPIC_API_KEY",    "inject_header": "x-api-key",     "format": "{}"}
+        {"env": "ANTHROPIC_API_KEY", "inject_header": "Authorization", "format": "Bearer {}", "prefix": "sk-ant-oat"},
+        {"env": "ANTHROPIC_API_KEY", "inject_header": "x-api-key",     "format": "{}"}
       ]
     },
     "github": {

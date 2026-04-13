@@ -19,7 +19,7 @@ echo $COCO_PHANTOM_TOKEN   # save this, you'll pass it to agents
 
 ```bash
 export OPENAI_API_KEY=sk-...
-export ANTHROPIC_API_KEY=sk-ant-...     # or ANTHROPIC_AUTH_TOKEN=sk-ant-oat01-...
+export ANTHROPIC_API_KEY=sk-ant-...    # API key (sk-ant-api...) or Claude Code OAuth token (sk-ant-oat...)
 export GITHUB_TOKEN=ghp_...
 export HTTPBIN_TOKEN=any-value          # any string — used for smoke tests
 
@@ -57,22 +57,24 @@ The gateway returns `407` on a missing/wrong phantom token, `404` on an unknown 
 
 Point Claude Code at the gateway and give it the phantom token as its "API key". The gateway injects the real Anthropic credential server-side — no key on the local machine.
 
+The gateway detects the token shape at inject time:
+- `sk-ant-oat...` (Claude Code OAuth token) → injected as `Authorization: Bearer <token>`
+- anything else (regular API key) → injected as `x-api-key: <key>`
+
 ```bash
-# 1. Start the gateway with a real Anthropic credential
+# 1. Start the gateway (accepts both API keys and Claude Code OAuth tokens)
 export COCO_PHANTOM_TOKEN=my-secret
-export ANTHROPIC_API_KEY=sk-ant-...    # or ANTHROPIC_AUTH_TOKEN=sk-ant-oat01-...
+export ANTHROPIC_API_KEY=sk-ant-oat01-...   # or sk-ant-api... — gateway handles both
 docker compose up -d --build
 
 # 2. Point Claude Code at the gateway (no real credential here)
 export ANTHROPIC_BASE_URL=http://localhost:8080/anthropic
-export ANTHROPIC_API_KEY=my-secret     # phantom token — gateway swaps in the real key
+export ANTHROPIC_API_KEY=my-secret     # phantom token — gateway swaps in the real credential
 
 claude chat
 ```
 
-Claude Code sends `x-api-key: my-secret` to the gateway. The gateway validates the phantom, strips it, and injects the real Anthropic credential before forwarding to `api.anthropic.com`.
-
-For OAuth tokens (`ANTHROPIC_AUTH_TOKEN`): use `ANTHROPIC_AUTH_TOKEN=my-secret` on the Claude Code side — it will send `Authorization: Bearer my-secret` instead, which the gateway also accepts.
+Claude Code sends `x-api-key: my-secret` (or `Authorization: Bearer my-secret` when using an OAuth session). The gateway validates the phantom, strips it, and injects the real credential in the correct header before forwarding to `api.anthropic.com`.
 
 ---
 
@@ -90,7 +92,7 @@ Claude Code / SDK
                                           │
                                   strip phantom, inject real credential
                                     x-api-key: <real-key>
-                                    (or Authorization: Bearer <oauth>)
+                                    (or Authorization: Bearer <key>)
                                           │
                                           ▼
                                   api.anthropic.com (TLS)
@@ -121,7 +123,7 @@ Routes are defined in [`examples/profile.json`](./examples/profile.json) and mou
 }
 ```
 
-**Multi-source route** (ordered fallback — first available env var wins):
+**Multi-source route** (ordered fallback — first matching source wins):
 
 ```json
 {
@@ -129,13 +131,15 @@ Routes are defined in [`examples/profile.json`](./examples/profile.json) and mou
     "anthropic": {
       "upstream": "https://api.anthropic.com",
       "credential_sources": [
-        {"env": "ANTHROPIC_AUTH_TOKEN", "inject_header": "Authorization", "format": "Bearer {}"},
-        {"env": "ANTHROPIC_API_KEY",    "inject_header": "x-api-key",     "format": "{}"}
+        {"env": "ANTHROPIC_API_KEY", "inject_header": "Authorization", "format": "Bearer {}", "prefix": "sk-ant-oat"},
+        {"env": "ANTHROPIC_API_KEY", "inject_header": "x-api-key",     "format": "{}"}
       ]
     }
   }
 }
 ```
+
+The `prefix` field lets a single env var route to different headers based on token shape: OAuth tokens (`sk-ant-oat...`) inject as `Authorization: Bearer`, regular API keys fall through to `x-api-key`.
 
 **Single-source fields:**
 
@@ -153,6 +157,7 @@ Routes are defined in [`examples/profile.json`](./examples/profile.json) and mou
 | `env` | yes | — | Env var name |
 | `inject_header` | yes | — | Header to inject into |
 | `format` | no | `Bearer {}` | Format string |
+| `prefix` | no | — | If set, this source only matches when the credential value starts with this string |
 
 ---
 
@@ -164,7 +169,6 @@ Routes are defined in [`examples/profile.json`](./examples/profile.json) and mou
 | `COCO_LISTEN_PORT` | no | `8080` | Port to bind |
 | `COCO_PROFILE` | no | `/etc/coco/profile.json` | Profile file path |
 | `OPENAI_API_KEY` | — | — | Real OpenAI key |
-| `ANTHROPIC_AUTH_TOKEN` | — | — | Real Anthropic OAuth token (takes precedence over API key) |
 | `ANTHROPIC_API_KEY` | — | — | Real Anthropic API key |
 | `GITHUB_TOKEN` | — | — | Real GitHub token |
 | `HTTPBIN_TOKEN` | — | — | Any string (smoke tests) |
@@ -186,9 +190,13 @@ export COCO_PHANTOM_TOKEN=test-phantom
 export HTTPBIN_TOKEN=anything           # any value
 ./scripts/test-e2e.sh
 
-# With real Anthropic credential:
-export ANTHROPIC_API_KEY=sk-ant-...     # or ANTHROPIC_AUTH_TOKEN=...
+# With real Anthropic API key (x-api-key path):
+export ANTHROPIC_API_KEY=sk-ant-api-...
 ./scripts/test-e2e.sh
+
+# With Claude Code OAuth token (Authorization: Bearer path):
+export ANTHROPIC_API_KEY=sk-ant-oat01-...
+COCO_TEST_ANTHROPIC_MODE=oauth ./scripts/test-e2e.sh
 
 # With real OpenAI credential:
 export OPENAI_API_KEY=sk-...
