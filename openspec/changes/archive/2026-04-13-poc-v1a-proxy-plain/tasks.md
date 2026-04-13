@@ -28,6 +28,6 @@
 ## 5. Local Validation
 
 - [x] 5.1 Run `docker compose up` with dummy env vars; confirm server binds and returns `407` on `curl localhost:8080/openai/`
-- [ ] 5.2 Set real `COCO_PHANTOM_TOKEN` and `OPENAI_API_KEY`; send an OpenAI chat completion request via the gateway and confirm a valid response
-- [ ] 5.3 Confirm `OPENAI_API_KEY` never appears in any outbound request from the host (check via `tcpdump` or mitmproxy)
+- [x] 5.2 Set real `COCO_PHANTOM_TOKEN` and `OPENAI_API_KEY`; send an OpenAI chat completion request via the gateway and confirm a valid response
+- [x] 5.3 Confirm `OPENAI_API_KEY` never appears in any outbound request from the host (check via `tcpdump` or mitmproxy)
 - [x] 5.4 Confirm unmatched paths return `404` and missing upstream credential returns `503`
