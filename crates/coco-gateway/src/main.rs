@@ -7,7 +7,31 @@
 //! Routes are loaded from a JSON profile file at startup:
 //!   1. $COCO_PROFILE (env var)
 //!   2. /etc/coco/profile.json (default path)
-//!   3. Built-in defaults (openai / anthropic / github)
+//!   3. Built-in defaults (openai / anthropic / github / httpbin)
+//!
+//! ## Phantom token auth (per nono's pattern)
+//!
+//! The client sends the phantom token in the SAME HEADER it would use for a real
+//! credential. For example, Claude Code with `ANTHROPIC_API_KEY=<phantom>` sends
+//! `x-api-key: <phantom>`; the gateway validates and replaces with the real key.
+//!
+//! Accepted locations (checked in order):
+//!   1. Proxy-Authorization: Bearer <token>   — universal fallback / existing scripts
+//!   2. Each route's configured `inject_header` containing the phantom token
+//!
+//! ## Claude Code local flow
+//!
+//!   # Gateway side (has real credentials)
+//!   export COCO_PHANTOM_TOKEN=my-secret
+//!   export ANTHROPIC_AUTH_TOKEN=sk-ant-oat01-...  # OR ANTHROPIC_API_KEY=sk-ant-...
+//!   docker compose up -d
+//!
+//!   # Claude Code side (no real credentials)
+//!   export ANTHROPIC_BASE_URL=http://localhost:8080/anthropic
+//!   export ANTHROPIC_API_KEY=my-secret   # phantom token as the "API key"
+//!   claude chat                          # gateway injects real cred server-side
+
+use coco_gateway::{validate_proxy_authorization, validate_bearer_or_raw};
 
 use axum::{
     body::Body,
@@ -20,7 +44,6 @@ use axum::{
 use http_body_util::BodyExt;
 use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::client::legacy::Client;
-use nono_proxy::token::constant_time_eq;
 use rustls;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -28,22 +51,15 @@ use tracing::{error, info, warn};
 use zeroize::Zeroizing;
 
 // ---------------------------------------------------------------------------
-// Profile schema (tasks 1.1)
+// Credential source — one entry in a route's ordered fallback list
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
-struct Profile {
-    routes: std::collections::HashMap<String, ProfileRoute>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ProfileRoute {
-    upstream: String,
-    credential_env: String,
-    #[serde(default = "default_inject_header")]
-    inject_header: String,
+#[derive(Debug, Clone, Deserialize)]
+pub struct CredentialSource {
+    pub env: String,
+    pub inject_header: String,
     #[serde(default = "default_credential_format")]
-    credential_format: String,
+    pub format: String,
 }
 
 fn default_inject_header() -> String {
@@ -55,14 +71,56 @@ fn default_credential_format() -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Runtime route entry (task 1.2)
+// Profile schema
 // ---------------------------------------------------------------------------
 
-struct RouteEntry {
+#[derive(Debug, Deserialize)]
+struct Profile {
+    routes: std::collections::HashMap<String, ProfileRoute>,
+}
+
+/// A route as it appears in profile.json.
+/// Two forms (backwards-compatible):
+///   - Legacy: `credential_env` + `inject_header` + `credential_format`
+///   - Multi-source: `credential_sources` list (takes precedence when present)
+#[derive(Debug, Deserialize)]
+struct ProfileRoute {
     upstream: String,
-    credential_env: String,
+    #[serde(default)]
+    credential_env: Option<String>,
+    #[serde(default = "default_inject_header")]
     inject_header: String,
+    #[serde(default = "default_credential_format")]
     credential_format: String,
+    #[serde(default)]
+    credential_sources: Vec<CredentialSource>,
+}
+
+// ---------------------------------------------------------------------------
+// Runtime route entry
+// ---------------------------------------------------------------------------
+
+pub struct RouteEntry {
+    upstream: String,
+    /// Ordered credential sources; first available env var wins at inject time.
+    credential_sources: Vec<CredentialSource>,
+}
+
+impl RouteEntry {
+    fn from_profile(route: ProfileRoute) -> Self {
+        let sources = if !route.credential_sources.is_empty() {
+            route.credential_sources
+        } else if let Some(env) = route.credential_env {
+            vec![CredentialSource {
+                env,
+                inject_header: route.inject_header,
+                format: route.credential_format,
+            }]
+        } else {
+            vec![]
+        };
+        RouteEntry { upstream: route.upstream, credential_sources: sources }
+    }
 }
 
 struct AppState {
@@ -73,7 +131,7 @@ struct AppState {
 }
 
 // ---------------------------------------------------------------------------
-// Profile loading (task 2.1)
+// Profile loading
 // ---------------------------------------------------------------------------
 
 fn load_profile() -> (Vec<(String, RouteEntry)>, Option<String>) {
@@ -100,20 +158,10 @@ fn load_profile() -> (Vec<(String, RouteEntry)>, Option<String>) {
         }
     };
 
-    let routes: Vec<(String, RouteEntry)> = profile
+    let routes = profile
         .routes
         .into_iter()
-        .map(|(prefix, r)| {
-            (
-                prefix.trim_matches('/').to_string(),
-                RouteEntry {
-                    upstream: r.upstream,
-                    credential_env: r.credential_env,
-                    inject_header: r.inject_header,
-                    credential_format: r.credential_format,
-                },
-            )
-        })
+        .map(|(prefix, r)| (prefix.trim_matches('/').to_string(), RouteEntry::from_profile(r)))
         .collect();
 
     (routes, Some(path))
@@ -125,39 +173,66 @@ fn builtin_routes() -> Vec<(String, RouteEntry)> {
             "openai".to_string(),
             RouteEntry {
                 upstream: "https://api.openai.com".to_string(),
-                credential_env: "OPENAI_API_KEY".to_string(),
-                inject_header: "Authorization".to_string(),
-                credential_format: "Bearer {}".to_string(),
+                credential_sources: vec![CredentialSource {
+                    env: "OPENAI_API_KEY".to_string(),
+                    inject_header: "Authorization".to_string(),
+                    format: "Bearer {}".to_string(),
+                }],
             },
         ),
         (
             "anthropic".to_string(),
             RouteEntry {
                 upstream: "https://api.anthropic.com".to_string(),
-                credential_env: "ANTHROPIC_API_KEY".to_string(),
-                inject_header: "x-api-key".to_string(),
-                credential_format: "{}".to_string(),
+                // OAuth token (ANTHROPIC_AUTH_TOKEN) takes precedence over API key.
+                // The client chooses which phantom header to send:
+                //   OAuth flow:    Authorization: Bearer <phantom>
+                //   API key flow:  x-api-key: <phantom>
+                credential_sources: vec![
+                    CredentialSource {
+                        env: "ANTHROPIC_AUTH_TOKEN".to_string(),
+                        inject_header: "Authorization".to_string(),
+                        format: "Bearer {}".to_string(),
+                    },
+                    CredentialSource {
+                        env: "ANTHROPIC_API_KEY".to_string(),
+                        inject_header: "x-api-key".to_string(),
+                        format: "{}".to_string(),
+                    },
+                ],
             },
         ),
         (
             "github".to_string(),
             RouteEntry {
                 upstream: "https://api.github.com".to_string(),
-                credential_env: "GITHUB_TOKEN".to_string(),
-                inject_header: "Authorization".to_string(),
-                credential_format: "Bearer {}".to_string(),
+                credential_sources: vec![CredentialSource {
+                    env: "GITHUB_TOKEN".to_string(),
+                    inject_header: "Authorization".to_string(),
+                    format: "Bearer {}".to_string(),
+                }],
+            },
+        ),
+        (
+            "httpbin".to_string(),
+            RouteEntry {
+                upstream: "https://httpbin.org".to_string(),
+                credential_sources: vec![CredentialSource {
+                    env: "HTTPBIN_TOKEN".to_string(),
+                    inject_header: "Authorization".to_string(),
+                    format: "Bearer {}".to_string(),
+                }],
             },
         ),
     ]
 }
 
 // ---------------------------------------------------------------------------
-// Startup (task 2.2)
+// Startup
 // ---------------------------------------------------------------------------
 
 #[tokio::main]
 async fn main() {
-    // Install the ring crypto provider for rustls (required before any TLS operations)
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("failed to install ring crypto provider");
@@ -169,7 +244,6 @@ async fn main() {
         )
         .init();
 
-    // Required: phantom token
     let phantom_token = match std::env::var("COCO_PHANTOM_TOKEN") {
         Ok(t) if !t.is_empty() => Zeroizing::new(t),
         Ok(_) => {
@@ -182,20 +256,17 @@ async fn main() {
         }
     };
 
-    // Optional: listen port (default 8080)
     let port: u16 = std::env::var("COCO_LISTEN_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(8080);
 
-    // Load routes from profile or built-ins
     let (routes, profile_path) = load_profile();
     match profile_path {
         Some(p) => info!("Loaded {} route(s) from profile at {}", routes.len(), p),
         None => info!("No profile found, using built-in defaults ({} routes)", routes.len()),
     }
 
-    // Build HTTPS client with webpki roots
     let https_connector = HttpsConnectorBuilder::new()
         .with_webpki_roots()
         .https_only()
@@ -204,129 +275,147 @@ async fn main() {
 
     let https_client = Client::builder(hyper_util::rt::TokioExecutor::new()).build(https_connector);
 
-    let state = Arc::new(AppState {
-        phantom_token,
-        routes,
-        https_client,
-    });
+    let state = Arc::new(AppState { phantom_token, routes, https_client });
 
-    // Wire router: middleware → handler for all paths
     let app = Router::new()
         .fallback(proxy_handler)
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .with_state(state);
 
-    // Bind and start
     let addr = format!("0.0.0.0:{port}");
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .unwrap_or_else(|e| {
-            error!("Failed to bind to {}: {}", addr, e);
-            std::process::exit(1);
-        });
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap_or_else(|e| {
+        error!("Failed to bind to {}: {}", addr, e);
+        std::process::exit(1);
+    });
 
     info!("coco-gateway listening on {}", addr);
     axum::serve(listener, app).await.expect("server error");
 }
 
 // ---------------------------------------------------------------------------
-// Phantom token validation middleware
+// Phantom token auth
 // ---------------------------------------------------------------------------
+
+/// Result of phantom token authentication.
+///
+/// Records which header carried the phantom token and, if it came from a
+/// route's credential source header, which source index matched. Both are
+/// used by the proxy handler to strip the right header and prefer the right
+/// credential source for injection.
+#[derive(Clone)]
+struct PhantomAuth {
+    /// The header name to strip from the forwarded request.
+    header: String,
+    /// If the phantom came from a credential source header, its index.
+    /// None means it came from Proxy-Authorization → use first available source.
+    preferred_source: Option<usize>,
+}
+
+/// Find and validate the phantom token from the incoming request.
+///
+/// Checks in order:
+/// 1. `Proxy-Authorization: Bearer <token>` — universal fallback
+/// 2. Each credential source's `inject_header` containing `<token>` or `Bearer <token>`
+///
+/// Returns `Some(PhantomAuth)` on success, `None` if no valid token found.
+fn find_phantom_auth(
+    req: &Request<Body>,
+    token: &Zeroizing<String>,
+    sources: &[CredentialSource],
+) -> Option<PhantomAuth> {
+    // 1. Proxy-Authorization (universal fallback — keeps test scripts working)
+    if let Some(v) = req.headers().get("proxy-authorization") {
+        if validate_proxy_authorization(v.as_bytes(), token) {
+            return Some(PhantomAuth {
+                header: "proxy-authorization".to_string(),
+                preferred_source: None,
+            });
+        }
+    }
+
+    // 2. Each credential source's inject_header
+    for (i, src) in sources.iter().enumerate() {
+        let header_lower = src.inject_header.to_lowercase();
+        if let Some(v) = req.headers().get(header_lower.as_str()) {
+            if validate_bearer_or_raw(v.as_bytes(), token) {
+                return Some(PhantomAuth {
+                    header: header_lower,
+                    preferred_source: Some(i),
+                });
+            }
+        }
+    }
+
+    None
+}
 
 async fn auth_middleware(
     State(state): State<Arc<AppState>>,
-    req: Request<Body>,
+    mut req: Request<Body>,
     next: Next,
 ) -> Response {
-    let proxy_auth = req
-        .headers()
-        .get("proxy-authorization")
-        .map(|v| v.as_bytes().to_owned());
+    // Extract path prefix to look up route's credential sources
+    let path = req.uri().path();
+    let prefix = path.trim_start_matches('/').split('/').next().unwrap_or("");
+    let sources: &[CredentialSource] = state
+        .routes
+        .iter()
+        .find(|(p, _)| p == prefix)
+        .map(|(_, entry)| entry.credential_sources.as_slice())
+        .unwrap_or(&[]);
 
-    let valid = match &proxy_auth {
-        None => false,
-        Some(bytes) => validate_proxy_authorization(bytes, &state.phantom_token),
-    };
-
-    if !valid {
-        warn!("Invalid or missing Proxy-Authorization");
-        return (
-            StatusCode::PROXY_AUTHENTICATION_REQUIRED,
-            "407 Proxy Authentication Required",
-        )
-            .into_response();
+    match find_phantom_auth(&req, &state.phantom_token, sources) {
+        Some(auth) => {
+            req.extensions_mut().insert(auth);
+            next.run(req).await
+        }
+        None => {
+            warn!("Invalid or missing phantom token");
+            (StatusCode::PROXY_AUTHENTICATION_REQUIRED, "407 Proxy Authentication Required")
+                .into_response()
+        }
     }
-
-    next.run(req).await
 }
 
-fn validate_proxy_authorization(header_bytes: &[u8], token: &Zeroizing<String>) -> bool {
-    let Ok(header_str) = std::str::from_utf8(header_bytes) else {
-        return false;
-    };
-
-    let lower = header_str.to_lowercase();
-
-    if let Some(rest) = lower.strip_prefix("bearer ") {
-        let candidate = &header_str[header_str.len() - rest.len()..];
-        return constant_time_eq(candidate.trim().as_bytes(), token.as_bytes());
-    }
-
-    if let Some(rest) = lower.strip_prefix("basic ") {
-        let encoded = &header_str[header_str.len() - rest.len()..];
-        return validate_basic_auth(encoded.trim(), token);
-    }
-
-    false
-}
-
-fn validate_basic_auth(encoded: &str, token: &Zeroizing<String>) -> bool {
-    use base64::Engine;
-    let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
-        return false;
-    };
-    let Ok(decoded_str) = std::str::from_utf8(&decoded) else {
-        return false;
-    };
-    let password = match decoded_str.split_once(':') {
-        Some((_, pw)) => pw,
-        None => return false,
-    };
-    constant_time_eq(password.as_bytes(), token.as_bytes())
-}
 
 // ---------------------------------------------------------------------------
-// Proxy handler (task 3.1 — per-route inject_header + credential_format)
+// Proxy handler
 // ---------------------------------------------------------------------------
 
 async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body>) -> Response {
     let path = req.uri().path();
 
-    // Extract prefix (first path segment after leading slash)
+    // Extract prefix
     let stripped = path.trim_start_matches('/');
     let prefix = stripped.split('/').next().unwrap_or("");
 
-    // Look up route — 404 for unknown prefix
-    let route_entry = state.routes.iter().find(|(p, _)| p == prefix);
-    let (_, entry) = match route_entry {
+    // Route lookup — 404 for unknown prefix
+    let (_, entry) = match state.routes.iter().find(|(p, _)| p == prefix) {
         Some(r) => r,
         None => return (StatusCode::NOT_FOUND, "404 Not Found").into_response(),
     };
 
-    // Resolve credential — 503 if absent
-    let credential = match std::env::var(&entry.credential_env) {
-        Ok(v) if !v.is_empty() => v,
-        _ => {
-            warn!("Upstream credential {} not set", entry.credential_env);
+    // Retrieve phantom auth result set by middleware
+    let phantom_auth = req.extensions().get::<PhantomAuth>().cloned().unwrap_or(PhantomAuth {
+        header: "proxy-authorization".to_string(),
+        preferred_source: None,
+    });
+
+    // Resolve credential: prefer the source whose header matched the phantom,
+    // then fall through to first available source.
+    let resolved = resolve_credential(&entry.credential_sources, phantom_auth.preferred_source);
+    let (src, credential) = match resolved {
+        Some(r) => r,
+        None => {
+            warn!("No credential available for route '{}'", prefix);
             return (StatusCode::SERVICE_UNAVAILABLE, "503 Service Unavailable").into_response();
         }
     };
 
-    // Build upstream path: strip /<prefix>
+    // Build upstream path
     let upstream_path = &path[prefix.len() + 1..];
     let upstream_path = if upstream_path.is_empty() { "/" } else { upstream_path };
 
-    // Build upstream URI
     let query = req.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
     let upstream_url = format!("{}{}{}", entry.upstream, upstream_path, query);
     let upstream_uri: Uri = match upstream_url.parse() {
@@ -337,23 +426,22 @@ async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body>) -
         }
     };
 
-    // Build credential header value using per-route format
-    let credential_value = entry.credential_format.replace("{}", &credential);
-
-    // Clone and mutate headers: strip Proxy-Authorization, inject credential header
+    // Mutate headers: strip phantom auth header(s), set upstream host, inject credential
     let method = req.method().clone();
     let mut headers = req.headers().clone();
-    headers.remove("proxy-authorization");
+
+    headers.remove(phantom_auth.header.as_str());
+    headers.remove("proxy-authorization"); // always clean up
     headers.remove("host");
-    if let Ok(header_name) = HeaderName::from_bytes(entry.inject_header.as_bytes()) {
+
+    let inject_value = src.format.replace("{}", &credential);
+    if let Ok(header_name) = HeaderName::from_bytes(src.inject_header.as_bytes()) {
         headers.insert(
             header_name,
-            HeaderValue::from_str(&credential_value)
-                .unwrap_or_else(|_| HeaderValue::from_static("")),
+            HeaderValue::from_str(&inject_value).unwrap_or_else(|_| HeaderValue::from_static("")),
         );
     }
 
-    // Set upstream Host
     let upstream_host = upstream_uri.host().unwrap_or("");
     headers.insert(
         "host",
@@ -382,7 +470,6 @@ async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body>) -
         }
     };
 
-    // Forward and stream response
     match state.https_client.request(upstream_req).await {
         Ok(resp) => {
             let status = resp.status();
@@ -401,4 +488,28 @@ async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body>) -
             StatusCode::BAD_GATEWAY.into_response()
         }
     }
+}
+
+/// Resolve a credential from the sources list.
+///
+/// If `preferred` is Some(i), try source[i] first (its env var was the one
+/// that carried the phantom token). Falls through to the first available source.
+fn resolve_credential(
+    sources: &[CredentialSource],
+    preferred: Option<usize>,
+) -> Option<(&CredentialSource, String)> {
+    // Try preferred source first
+    if let Some(i) = preferred {
+        if let Some(src) = sources.get(i) {
+            if let Ok(v) = std::env::var(&src.env) {
+                if !v.is_empty() {
+                    return Some((src, v));
+                }
+            }
+        }
+    }
+    // Fall through to first available source
+    sources.iter().find_map(|src| {
+        std::env::var(&src.env).ok().filter(|v| !v.is_empty()).map(|v| (src, v))
+    })
 }
