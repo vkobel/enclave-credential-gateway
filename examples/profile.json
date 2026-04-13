@@ -6,9 +6,10 @@
     },
     "anthropic": {
       "upstream": "https://api.anthropic.com",
-      "credential_env": "ANTHROPIC_API_KEY",
-      "inject_header": "x-api-key",
-      "credential_format": "{}"
+      "credential_sources": [
+        {"env": "ANTHROPIC_AUTH_TOKEN", "inject_header": "Authorization", "format": "Bearer {}"},
+        {"env": "ANTHROPIC_API_KEY",    "inject_header": "x-api-key",     "format": "{}"}
+      ]
     },
     "github": {
       "upstream": "https://api.github.com",
