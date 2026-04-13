@@ -18,6 +18,7 @@ set -euo pipefail
 GATEWAY_PORT=8080
 COMPOSE_PROJECT="coco-validate-$$"
 PASS=0; FAIL=0; SKIP=0
+GW_ALREADY_RUNNING=false
 
 # ── Colour helpers ────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -31,9 +32,14 @@ section() { echo; echo -e "${CYAN}$*${NC}"; }
 GW_TMPFILE=""
 cleanup() {
   echo
-  info "Tearing down gateway"
-  docker compose -p "$COMPOSE_PROJECT" down --remove-orphans 2>/dev/null || true
   [[ -n "$GW_TMPFILE" && -f "$GW_TMPFILE" ]] && rm -f "$GW_TMPFILE"
+
+  if [[ "$GW_ALREADY_RUNNING" == true ]]; then
+    info "Gateway was already running — leaving it up"
+  else
+    info "Tearing down gateway"
+    docker compose -p "$COMPOSE_PROJECT" down --remove-orphans 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT
 GW_TMPFILE=$(mktemp)
@@ -54,20 +60,26 @@ done
 # ── Start gateway ─────────────────────────────────────────────────────────────
 section "Starting gateway"
 
-info "Running: docker compose up --build --detach"
-docker compose -p "$COMPOSE_PROJECT" up --build --detach 2>&1 | tail -5
+# Check if something is already listening on the gateway port
+if curl -s -o /dev/null --connect-timeout 1 "http://localhost:${GATEWAY_PORT}/" 2>/dev/null; then
+  GW_ALREADY_RUNNING=true
+  pass "Gateway is already running (port $GATEWAY_PORT) — skipping docker compose up"
+else
+  info "Running: docker compose up --build --detach"
+  docker compose -p "$COMPOSE_PROJECT" up --build --detach 2>&1 | tail -5
 
-info "Waiting for gateway to respond"
-for i in $(seq 1 30); do
-  status=$(curl -s -o /dev/null -w "%{http_code}" \
-    "http://localhost:${GATEWAY_PORT}/openai/" 2>/dev/null || echo "000")
-  if [[ "$status" =~ ^(407|200|404|503)$ ]]; then
-    pass "Gateway is up (port $GATEWAY_PORT)"
-    break
-  fi
-  [[ $i -eq 30 ]] && { echo -e "${RED}ERROR: Gateway did not start after 30s${NC}"; exit 1; }
-  sleep 1
-done
+  info "Waiting for gateway to respond"
+  for i in $(seq 1 30); do
+    status=$(curl -s -o /dev/null -w "%{http_code}" \
+      "http://localhost:${GATEWAY_PORT}/openai/" 2>/dev/null || echo "000")
+    if [[ "$status" =~ ^(407|200|404|503)$ ]]; then
+      pass "Gateway is up (port $GATEWAY_PORT)"
+      break
+    fi
+    [[ $i -eq 30 ]] && { echo -e "${RED}ERROR: Gateway did not start after 30s${NC}"; exit 1; }
+    sleep 1
+  done
+fi
 
 # ── Helper ────────────────────────────────────────────────────────────────────
 # gw_request <method> <path> [extra curl args...]
