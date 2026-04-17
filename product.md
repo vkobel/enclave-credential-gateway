@@ -153,6 +153,74 @@ probably CoCo." At that point the project has moved from "clever POC" to
 
 ---
 
+## Unified Deployment Model: Three Modes, One Protocol
+
+The phantom token pattern is transport-agnostic. The same `Proxy-Authorization: Bearer <phantom>` header works whether the proxy is on the same host, a hardened local process, or a remote attested CVM. We support three deployment modes, unified by identical credential injection semantics:
+
+| Mode | Topology | Trust Anchor | Use Case |
+|------|----------|--------------|----------|
+| **Remote** (Phase 1) | Agent → Network → CoCo Gateway (Phala TDX) | TDX DCAP QuoteV4 | Corporate shared infra, untrusted agent host |
+| **Local** (Phase 2) | Agent → localhost:PORT (Nono sandbox) | Process isolation + macOS seatbelt | Developer laptop, single-user |
+| **Enclave** (Phase 3) | Agent → localhost:PORT (hardened binary) | Secure Enclave + Hardened Runtime + Apple attestation | High-sensitivity local workloads |
+
+All three speak the same JSON profile format, validate phantom tokens identically, and can be targeted by the same agent SDK with only a config change.
+
+### Remote Mode (Current — Phase 1)
+
+What we're building now. The gateway runs as a Phala Cloud TDX CVM, exposed over HTTPS with attestation available at `GET /attest`. The agent host is completely untrusted — compromise of the laptop reveals only the phantom token, not the upstream credentials. Attestation is mandatory; the operator verifies the quote before provisioning secrets into the CVM.
+
+**Configuration:**
+```yaml
+# ~/.coco/config
+mode: remote
+gateway_url: https://coco-gateway.example.com
+phantom_token: coco-phantom-abc123
+verify_attestation: true
+```
+
+### Local Mode (Next — Phase 2)
+
+Integration with [Nono](https://nono.sh) — the agent runs inside Nono's capability-based sandbox, with the CoCo Gateway binary as a sidecar process on the same host. Network egress from the sandbox is forced through the local proxy; the sandbox policy denies direct outbound connections.
+
+This gives process-level isolation without a network hop. The phantom token is still required, but now the proxy is local and the attestation is implicit (same-host IPC). The agent can see the proxy's process but cannot extract credentials from it due to the sandbox boundary.
+
+**Why Nono:** Nono already implements the phantom token pattern, route store, and credential injection. Rather than reimplement, we consume Nono's proxy library (or contribute upstream) and add our TDX-aware gateway as an additional backend. Nono users get TEE-grade remote attestation as an opt-in upgrade path; CoCo users get local sandboxing as a dev-mode convenience.
+
+**Configuration:**
+```yaml
+mode: local
+nono_profile: ~/.nono/profiles/secure.yml
+phantom_token: coco-phantom-abc123
+# No gateway_url — proxy is localhost via Nono
+```
+
+### Enclave Mode (Phase 3)
+
+The hardened macOS approach from [d-inference](https://github.com/vkobel/d-inference): a Rust binary signed with Hardened Runtime, using the Secure Enclave for key operations, with attestation via Apple Device Attestation (MDM) or custom challenge-response. This is the "Private Cloud Compute for the rest of us" — hardware-backed assurance that the proxy binary hasn't been tampered with, without needing a remote CVM.
+
+**Why this matters:** Some workloads can't leave the machine (airgapped, legal hold, classified). Others need the lowest possible latency. Enclave mode gives you attestation-backed credential isolation without network dependency.
+
+**Configuration:**
+```yaml
+mode: enclave
+binary_path: /opt/coco/coco-gateway-enclave
+attestation: apple-secure-enclave
+phantom_token: coco-phantom-abc123
+```
+
+### Migration Path
+
+All three modes share the **phantom token protocol**, enabling seamless migration:
+
+1. **Start with Remote** (Phase 1): Deploy to Phala, validate the model with real users, establish trust in the attestation flow.
+2. **Add Local** (Phase 2): Developer installs Nono, runs `coco mode local`, same phantom token now routes through local sandbox instead of remote CVM. Faster iteration, same security model.
+3. **Upgrade to Enclave** (Phase 3): For the paranoid, swap the local Nono proxy for the hardened enclave binary. Same config, stronger attestation.
+
+The agent SDK handles this transparently:
+```bash
+coco run --mode auto  # Detects: Remote if configured, Local if Nono present, Enclave if binary available
+```
+
 ## Non-goals, at every horizon
 
 - **Not a general HTTPS forward proxy.** We only proxy explicitly configured
@@ -169,3 +237,7 @@ probably CoCo." At that point the project has moved from "clever POC" to
   make the agent trustworthy. Policy and budgets are how we keep a
   misbehaving agent from burning the house down, not how we stop it from
   misbehaving.
+- **Not a fork of Nono.** We integrate with Nono, we don't replace it. The
+  Nono project owns sandboxing; we own remote attestation and TEE deployment.
+  Where our work can upstream (hardened runtime mode, Secure Enclave key
+  generation), we contribute back.
