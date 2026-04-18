@@ -2,272 +2,236 @@
 
 ## What this is
 
-A Rust HTTP proxy that stands between AI agents and upstream APIs (OpenAI,
-Anthropic, GitHub, …). Agents authenticate with a **phantom token** — a
-scoped, revocable, short-lived credential that is worthless outside the
-gateway. The gateway validates it in constant time, strips it, injects the
-real upstream credential, and streams the response back. Real keys never
-touch the agent's host.
-
-The gateway is built on the `nono-proxy` library and runs inside a Phala
-Cloud TDX Confidential VM. A `GET /attest` endpoint returns a raw TDX DCAP
-QuoteV4 so any caller can verify the exact binary holding the credentials
-before trusting it.
+A small Rust HTTP proxy you deploy once into a TEE. It holds your real
+upstream API keys (OpenAI, Anthropic, GitHub, …) and gives your agents
+**phantom tokens** in their place — scoped, revocable credentials that are
+worthless outside your gateway. The gateway validates the phantom in
+constant time, swaps in the real key, and forwards the request. Real keys
+never leave the enclave; your laptop, your CI, your phone all hold
+phantoms.
 
 The core insight: **credentials are infrastructure, not agent state.**
 
 ---
 
-## Who this is for
+## Who v1 is for
 
-**Regulated teams running AI agents against paid APIs.** Financial services,
-healthcare, legal, and EU-AI-Act-scoped companies share four problems no
-current tool answers together:
+**You. One technical AI user with paid API keys and several places that
+need to use them** — Claude Code on a laptop, an agent on a desktop, a CI
+job, maybe a phone shortcut. You are tired of:
 
-1. **Custody.** Production API keys must not live on developer laptops or
-   CI runners. Today they do.
-2. **Attribution.** "Which person, on which device, through which policy,
-   made this call?" — must be answerable from an audit log.
-3. **Revocation.** An employee leaves; a laptop is lost; an agent
-   misbehaves. Access must be cut in seconds, without redeploying.
-4. **Proof.** Auditors and regulators need third-party-verifiable evidence
-   of the above, not vendor assurances.
+- Pasting `sk-…` keys into config files on every machine.
+- Not knowing which agent burned through your monthly budget.
+- Rotating one leaked key in seven places.
+- Trusting every tool you install with full provider access.
 
-These teams already run MDM (Jamf, Kandji, Intune), SSO (Okta, Entra),
-and corporate CAs. They will adopt new infrastructure that slots into what
-they have — not a parallel identity system.
+You are not a regulated enterprise. You don't need MDM, OIDC, or
+hardware-attested clients. You trust your own laptop. You want a personal
+key vault that lives in a place even *you* can't accidentally `cat`.
 
----
-
-## The bet: mutual attestation
-
-A plain remote proxy answers custody and attribution. It does not answer
-**"is the client I'm serving really the approved binary on an approved
-device?"** — which regulated customers ask first.
-
-CoCo's differentiator is a two-sided attested channel:
-
-- **Device → Gateway.** A local hardened companion binary (descended from
-  `d-inference`) holds a non-extractable Secure-Enclave keypair. Its public
-  half is enrolled via the customer's existing MDM. On every request it
-  signs a fresh challenge; the gateway rejects anything unsigned.
-- **Gateway → Device.** The companion fetches `GET /attest`, pins the
-  gateway's `MRTD`, and refuses to forward requests to a gateway whose quote
-  fails verification. The pinning is part of the companion's signed config.
-- **Agent → Companion.** `nono-proxy`'s sandbox (Landlock on Linux,
-  Seatbelt on macOS) forces the agent's outbound traffic through the
-  companion. The agent cannot reach `api.openai.com` directly; attempting to
-  is a visible policy violation.
-
-Net property — the thing we sell: **the agent cannot exfiltrate a
-credential, the laptop cannot impersonate an approved client, and the
-gateway cannot silently serve a tampered binary.** All three properties are
-checkable by a third party.
+(The enterprise story — mutual attestation, MDM-bound devices, signed
+receipts — is real, and it's the long-term commercial direction. It is
+deliberately out of scope for v1. See the roadmap.)
 
 ---
 
-## Near term — ship in 2 weeks
+## The v1 promise
 
-**Goal: Phase 1b complete, externally reproducible.**
+> *Deploy once. Add your real keys once. Mint a phantom per agent.
+> Point every agent at the gateway. Watch the audit log to see who
+> spent what. Revoke a phantom in one command when you're done.*
 
-- `coco-gateway` running on a Phala TDX CVM with secrets provisioned via
-  `phala cvms secrets set`.
-- `GET /attest` returns a non-debug TDX DCAP QuoteV4 that verifies offline
-  against Intel's PCS.
-- GHCR image published by `.github/workflows/docker.yml`.
-- `DEPLOY.md` takes an operator from a Phala account to a working gateway
-  in under fifteen minutes.
-- End-to-end demo: Claude Code on a fresh laptop with only the phantom
-  token; `grep` on process tree and `tcpdump` on the laptop prove the real
-  `sk-ant-…` never appears locally.
-
-**Success criterion:** one external developer deploys their own instance
-from the docs alone, verifies the attestation quote, and sends a completion
-through it.
+Single user. Multiple clients. One vault. Verifiable hardware isolation.
 
 ---
 
-## Near term — ship in 2 months
+## v1 — definition of done
 
-**Goal: a control plane a regulated ten-person team can run in production.**
+A user with no Rust knowledge can complete this flow in **under 30
+minutes**, end to end:
 
-Four work streams in parallel:
+1. **Deploy.** One command (`coco deploy phala` or `docker compose up`)
+   stands up the gateway on Phala TDX CVM (or any Docker host). Deploy
+   prints an `admin token` once.
+2. **Verify the binary.** `coco verify <gateway-url>` fetches `GET /attest`,
+   checks the TDX QuoteV4 against Intel's PCS, asserts no debug bit, and
+   prints the `MRTD` so the user can pin it.
+3. **Add real credentials.** `coco creds add openai sk-…` and
+   `coco creds add anthropic sk-ant-…`. Stored encrypted at rest, only
+   readable inside the TEE.
+4. **Mint phantoms per client.**
+   ```
+   coco token create --name laptop-claude-code --routes anthropic --budget 100k-tokens/day
+   coco token create --name ci-runner          --routes openai,anthropic --expires 30d
+   coco token create --name phone-shortcut     --routes anthropic --budget 10k-tokens/day
+   ```
+5. **Use them.** Each agent points at the gateway URL with its phantom in
+   place of the real key. Existing SDKs work with no code changes (the
+   gateway accepts the phantom in the same header the SDK already sends).
+6. **Watch.** `coco audit tail` streams every request: which phantom, which
+   route, status, bytes, approximate token count.
+7. **Revoke.** `coco token revoke laptop-claude-code` cuts that phantom in
+   under a second. The other phantoms keep working.
 
-**1. Control plane (inside the TEE).**
-- Policy engine: per-token rate limits, daily token budgets, upstream path
-  allowlists, request size caps. Hot-reloadable config beside the route
-  profile.
-- Per-agent phantom tokens: short-lived, scoped, individually revocable.
-  Issued by the gateway; bound to a policy bundle at issue time.
-- Append-only audit log: timestamp, phantom-token ID, route, upstream path,
-  status, bytes in/out, approximate token count. JSON to stdout, streamable
-  to Loki, Datadog, or S3.
-- `/metrics` (Prometheus): request rate, 4xx/5xx breakdown, upstream
-  latency percentiles, budget consumption per token ID.
+### What's in v1
 
-**2. Local hardened companion (`coco-companion`).**
-- Signed macOS binary with Hardened Runtime and notarization.
-- Secure-Enclave-held P-256 keypair, non-extractable.
-- Fetches `/attest`, pins `MRTD`, refuses to proxy otherwise.
-- Presents phantom token + SE-signed challenge on every request to the
-  gateway.
-- Embeds `nono-proxy` as the local sandbox enforcer.
+- TDX CVM deployment (Phase 1b, in flight).
+- `GET /attest` returning verified non-debug TDX QuoteV4.
+- Encrypted credential store inside the TEE (sealed by Phala secret
+  injection or by a unsealing key derived inside the enclave).
+- Phantom token registry (name, routes allowlist, budget caps, expiry,
+  status), persisted encrypted at rest.
+- Constant-time phantom validation, multi-source credential injection
+  (already done in `coco-gateway`).
+- Per-token policy: routes allowlist, daily request count cap, daily
+  approximate-token-count cap for LLM routes, hard expiry.
+- Append-only structured audit log, queryable via admin API, optionally
+  streamed to a file or S3.
+- Admin API (`/admin/*`) authenticated by a single admin token printed at
+  deploy.
+- `coco` CLI: `deploy`, `verify`, `creds {add|rotate|rm|ls}`,
+  `token {create|revoke|ls}`, `audit {tail|grep}`.
+- One-page `DEPLOY.md` and `USING.md`.
 
-**3. Mutual-attestation MVP.**
-- Gateway accepts and verifies the SE signature.
-- Gateway binds the phantom-token issuance to an MDM-enrolled device
-  public key at issue time.
-- Companion refuses to launch if its own binary digest does not match the
-  signed manifest.
+### What is explicitly NOT in v1
 
-**4. Enrollment.**
-- One-shot flow: operator signs in via OIDC (Okta/Entra) → gateway issues a
-  phantom bundle for device X → MDM pushes the companion binary and config
-  → first launch enrolls the SE public key with the gateway.
-
-**Success criterion:** a regulated ten-person team runs twenty agents for a
-week, no raw provider key on any laptop, the security lead can answer "who
-spent my Anthropic budget yesterday, from which device, under which policy"
-from the audit log in under a minute.
-
----
-
-## Direction — 2 years
-
-**Goal: the default credential layer for regulated agent fleets.**
-
-When a CISO in a regulated industry asks *"how are our agents handling API
-keys?"*, the defensible answer is "through an attested credential
-mediator, and here is the quote, the audit trail, and the policy bundle
-the auditor asked for." CoCo is that answer.
-
-Concretely that means:
-
-- **Substrate portability.** The gateway runs on Phala today; on Azure
-  Confidential, GCP Confidential, and AWS Nitro tomorrow. The encrypted
-  vault format is portable across substrates; operators pick their TEE
-  without re-provisioning secrets.
-- **Companion portability.** The macOS companion is the first substrate.
-  Windows (Defender Application Control + TPM-backed keys) and Linux
-  (`nono-proxy` Landlock enforcement + TPM or SE-style keys where
-  available) follow.
-- **Issuance tied to corporate identity.** Phantom tokens mint from OIDC
-  claims; device binding from MDM; revocation is a single API call that
-  propagates in seconds.
-- **Delegation.** An agent can hand a narrower phantom to a sub-agent or
-  tool call, and the narrowing is enforced by the gateway, not by the
-  sub-agent.
-- **Signed receipts.** The gateway signs every response summary with an
-  attested key, giving customers evidence they can show auditors and
-  regulators without trusting us.
-- **A hosted offering.** "CoCo Cloud" for teams that want the gateway
-  without running the TEE substrate themselves.
-
-The 2-year success criterion: at least two major agent frameworks ship
-CoCo-aware defaults, and at least one regulated industry association (a
-bank consortium, a healthcare alliance, a law-firm tech committee) cites
-attested credential mediation as a recommended control.
+- **No mutual attestation, no client-side hardened binary.** You trust your
+  own devices; the phantom token is the client identity. (Future.)
+- **No web UI.** CLI is enough for the target user; a UI is a v1.x.
+- **No multi-tenant.** One admin token, one operator. (Future.)
+- **No OIDC, no MDM, no SSO.** (Future, enterprise.)
+- **No mobile/passkey provisioning.** (Identified as a v1.x delight feature
+  — see open problems.)
+- **No model routing, no caching, no prompt rewriting.** Out of scope
+  forever — different product.
 
 ---
 
-## Architecture
+## Architecture (v1)
 
 ```
-┌──────────────────────────────────┐        ┌────────────────────────────────┐
-│  Developer laptop (MDM-managed)  │        │  Phala TDX CVM                 │
-│                                  │        │                                │
-│  ┌──────────┐    ┌────────────┐  │  mTLS  │  ┌──────────────────────────┐  │
-│  │  Agent   │───▶│ coco-      │──┼───────▶│  │  coco-gateway            │  │
-│  │ (Claude  │    │ companion  │  │ +phantom│ │  - policy engine         │  │
-│  │  Code)   │    │            │  │ +SE sig │ │  - audit log             │  │
-│  │          │    │ nono-proxy │  │        │  │  - /attest (TDX QuoteV4) │  │
-│  │          │    │ sandbox ───┤  │        │  │  - credential vault      │  │
-│  └──────────┘    │ SE keypair │  │        │  └──────────┬───────────────┘  │
-│                  │ MRTD pin   │  │        │             │                  │
-│                  └────────────┘  │        │             ▼                  │
-│                                  │        │         upstream API (TLS)     │
-└──────────────────────────────────┘        └────────────────────────────────┘
-       ▲                                                   │
-       │  OIDC sign-in, MDM enrolls companion              │
-       │  and registers SE public key with gateway         │
-       └───────────────────────────────────────────────────┘
+┌─────────────────┐                     ┌──────────────────────────────────┐
+│ Laptop / CI /   │                     │ Phala TDX CVM                    │
+│ phone / etc.    │                     │                                  │
+│                 │   phantom token     │  ┌────────────────────────────┐  │
+│   ┌──────────┐  │  ───────────────▶   │  │ coco-gateway               │  │
+│   │ agent    │──┼─────────────────────┼─▶│  - phantom registry        │  │
+│   │ (any SDK)│  │   over TLS          │  │  - per-token policy        │  │
+│   └──────────┘  │                     │  │  - audit log               │  │
+│                 │                     │  │  - encrypted cred store    │  │
+│   ┌──────────┐  │                     │  │  - GET /attest (TDX quote) │  │
+│   │ coco CLI │──┼─────────────────────┼─▶│  - /admin (admin token)    │  │
+│   └──────────┘  │   admin token       │  └─────────────┬──────────────┘  │
+└─────────────────┘                     │                │                 │
+                                        │                ▼ (real key)      │
+                                        │         upstream API (TLS)       │
+                                        └──────────────────────────────────┘
 ```
 
-The agent sees only `http://localhost`. The companion sees only the gateway.
-The gateway sees only attested companions. Upstream APIs see only the
-gateway.
+The agent sees only the gateway URL and a phantom. The CLI talks to the
+same gateway with an admin token. The real credential exists only inside
+the enclave.
 
 ---
 
-## Open problems we are deliberately not pretending to have solved
+## The 4-week path to v1
 
-**Secret provisioning UX.** Today an operator runs `phala cvms secrets set`
-from a laptop — meaning the plaintext key touches a general-purpose OS at
-least once. The direction we want to pursue: **provision secrets from a
-phone using a passkey.** The operator enters the real API key into a mobile
-app, the passkey-backed WebAuthn signature authorizes an encrypted envelope
-addressed to the TEE's attested public key, and the plaintext never touches
-a laptop or a CLI. This needs design work — envelope format, recovery,
-rotation, multi-admin quorum, key-rollover — and we will not ship
-hand-wavy; but it is the right target for "first-time credential entry"
-and a likely 6-to-9-month item.
+Anchored on what's actually in the repo today.
 
-**Non-macOS companion.** `nono-proxy` already targets Linux (Landlock).
-Windows needs Defender Application Control + a TPM-held client key;
-Microsoft's tooling here is workable but not plug-and-play. We need one
-design partner per platform before committing.
+**Week 1 — Phase 1b ships.**
+`/attest` returns a verified non-debug TDX QuoteV4. GHCR image published.
+`DEPLOY.md` walks an operator from "I have a Phala account" to a working
+gateway in under 15 minutes. End-to-end demo: Claude Code + phantom token,
+real key never on the laptop.
 
-**Revoking a compromised gateway image.** MRTD pinning plus short-lived
-secret leases is the answer. The operational playbook (who signs the new
-manifest, how fast companions pick it up, how to fail closed) is not yet
-written.
+**Week 2 — Phantom token registry.**
+Replace the single `COCO_PHANTOM_TOKEN` env var with an encrypted registry
+inside the TEE. Add the admin token, the `/admin/tokens` API, and the
+`coco token {create|revoke|ls}` CLI subcommands. Existing single-token
+behavior is preserved as a `--legacy-token` startup flag for one release.
 
-**Failure modes of the in-path companion.** The companion becomes a hot-path
-dependency. It needs a local health endpoint, a circuit breaker, and a
-clearly documented "fail closed" stance — a misbehaving companion must not
-silently degrade to "agent talks to upstream directly."
+**Week 3 — Policy + audit log.**
+Per-token route allowlist, daily request cap, daily token-count cap (for
+LLM routes; approximate from request/response sizes). Append-only audit
+log to an encrypted on-disk volume, plus optional S3 sink. `coco audit
+tail` and `coco audit grep`.
 
----
+**Week 4 — Polish.**
+`coco deploy phala` one-shot deploy helper. `coco verify` for attestation.
+`coco creds {add|rotate|rm|ls}` against a sealed credential store.
+`USING.md` with copy-paste recipes for Claude Code, OpenAI Python SDK,
+GitHub CLI. End-to-end test that exercises the full flow from a fresh
+machine.
 
-## The library path
-
-Two primitives inside this product are reusable, and extracting them is
-worth doing — **once we have a second consumer**, not before:
-
-- **`attested-channel`**: a symmetric, substrate-pluggable handshake. Party
-  A presents a TDX quote, party B presents an SE/MDA/TPM assertion, both
-  sides bind the session key to their attestation. Trait-based substrates
-  so a TDX-to-SEV channel works the same as a TDX-to-macOS channel.
-- **`credential-mediator`**: phantom-token issuance and validation, route
-  store, credential injection, policy hook, audit hook, attestation
-  endpoint — today scattered across `nono-proxy` and `coco-gateway`. The
-  Vault-core-to-Vault-plugins shape.
-
-These extract cleanly when `coco-gateway`, `coco-companion`, and `nono`
-have all shipped and the overlap is obvious. We will not build them as
-speculative infrastructure ahead of that point.
-
-The framing for a future standards conversation: **Capability-Substitution
-Proxying — sandboxed code holds a phantom capability; an attested mediator
-substitutes the real credential on the sandbox boundary.** Applies far
-beyond AI agents: cloud CLIs, CI runners, browser extensions, MCP tool
-servers. Worth naming now; worth pursuing only after two products prove it.
+**Week 4, end:** the v1 promise is true. Ship it.
 
 ---
 
-## Non-goals
+## Tentative roadmap after v1
+
+Each step is a direction, not a commitment. Each is justified by what v1
+*didn't* solve.
+
+**v1.x — delight & ergonomics.**
+- **Mobile provisioning via passkey.** A small companion mobile app where
+  the operator pastes a real upstream key once, signs an envelope with a
+  passkey (WebAuthn), and the envelope is encrypted to the TEE's attested
+  public key. The plaintext never touches a laptop or CLI. This is the
+  right experience for first-time credential entry; we will not ship
+  hand-wavy crypto for it.
+- **Minimal admin web UI** for non-CLI users.
+- **Profile presets** for the top ten upstreams (currently you copy-paste
+  from `examples/profile.json`).
+
+**v2 — small teams.**
+- Multi-operator: more than one admin, role separation (admin / read-only /
+  audit).
+- Per-operator API tokens replacing the single admin token.
+- Audit log with operator attribution.
+- Hosted "CoCo Cloud" option for users who don't want to run a CVM
+  themselves.
+
+**v3 — enterprise / regulated.**
+- Mutual attestation. A hardened local companion (Secure-Enclave-backed
+  client identity, descended from `d-inference`) that authenticates the
+  device to the gateway, with the gateway's `MRTD` pinned in the
+  companion's signed config.
+- OIDC issuance (Okta, Entra) bound to MDM-enrolled device identity.
+- Signed per-call receipts under an attested gateway key.
+- Substrate portability beyond Phala (Azure Confidential, GCP Confidential,
+  AWS Nitro).
+- Compliance posture: SOC2-friendly audit format, exportable evidence
+  bundles.
+
+The v3 work is the eventual commercial direction. v1 exists to prove the
+model and build a base of users who become the design partners for v2 and
+the references for v3.
+
+---
+
+## Open problems we are not pretending to have solved
+
+- **First-time credential entry UX.** Today the operator pastes real keys
+  into a CLI. The passkey/mobile envelope flow above is the target;
+  envelope format, recovery path, and rotation still need design.
+- **Sealed credential storage at rest.** v1 ships with credentials sealed
+  by Phala's secret injection (the simple path). A portable, substrate-
+  agnostic vault format is a v2 item.
+- **Audit-log integrity.** v1 logs are append-only on an encrypted volume.
+  Hash-chained, tamper-evident logs (and signed receipts) are v3.
+
+---
+
+## Non-goals (forever)
 
 - **Not a general HTTPS forward proxy.** Only explicitly configured
-  upstreams with well-understood credential shapes. No generic `CONNECT`.
+  upstreams. No `CONNECT`.
 - **Not a model router.** No model selection, prompt rewriting, completion
-  caching, semantic routing. Keeping the gateway dumb is a feature.
-- **Not a replacement for Vault or cloud KMS** for non-agent workloads.
-  CoCo is specifically the answer for "agent → external API" traffic.
+  caching, semantic routing.
+- **Not a Vault replacement** for non-agent workloads. CoCo is specifically
+  for "agent → external API" traffic.
 - **Not a silver bullet for prompt injection.** Holding the credential
   outside the agent limits blast radius; policy and budgets contain a
-  misbehaving agent; nothing here makes the agent itself trustworthy.
-- **Not a fork of nono.** We integrate with it. Where our work generalizes
-  (companion binary, attested-channel library), we contribute back.
-- **Not a parallel identity system.** Phantom tokens mint from existing
-  corporate identity; device binding from existing MDM. We add a control
-  plane for agents, not a new directory for people.
+  misbehaving agent. Nothing here makes the agent itself trustworthy.
+- **Not a parallel identity system.** v3 will mint phantoms from existing
+  corporate identity, not invent a new one.
