@@ -1,8 +1,20 @@
 # CoCo Credential Gateway — v1 Task List
 
-> Generated from product vision review (April 2026).
+> Updated: April 2026 — refined after competitive review (OneCLI, AgentSecrets, Aembit).
 > Current state: Phase 1a complete (plain proxy). Phase 1b (CVM attestation) is in-flight.
 > Goal: achieve the v1 promise — deploy once, mint phantoms, audit, revoke.
+
+## Mental model
+
+OneCLI and AgentSecrets protect credentials from the agent.
+CoCo protects credentials from everyone — including the infrastructure operator —
+while producing a cryptographically verifiable audit trail.
+
+A classical KMS answers: "here is your secret, go use it."
+An HSM answers: "give me data, I'll sign it, here's the signature."
+CoCo answers: "give me the request, I'll authenticate and execute it inside a hardware boundary, here's the response."
+The credential participates in the live request but is never transmitted to the requester.
+This is the model. Keep it sharp.
 
 ---
 
@@ -26,7 +38,8 @@ Replaces the single `COCO_PHANTOM_TOKEN` env var with a named, per-client token 
 
 ### 2a. Encrypted registry storage
 
-- [ ] 2a.1 — Define `TokenRecord` struct: `id` (UUID), `name`, `routes_allowlist` (`Vec<String>`), `budget_daily_requests: Option<u32>`, `budget_daily_tokens: Option<u64>`, `expires_at: Option<DateTime<Utc>>`, `status: Active|Revoked`, `created_at`
+- [ ] 2a.1 — Define `TokenRecord` struct: `id` (UUID), `name` (human label for audit log and CLI), `routes_allowlist` (`Vec<String>`), `budget_daily_requests: Option<u32>`, `budget_daily_tokens: Option<u64>`, `expires_at: Option<DateTime<Utc>>`, `status: Active|Revoked`, `created_at`
+  - Note: `name` is a first-class field, not an alias. Audit log entries must use it ("claude-code called openai" not "token-3a9f called openai").
 - [ ] 2a.2 — Implement `TokenRegistry`: in-memory store backed by an encrypted-at-rest JSON file (`/data/tokens.enc`). Use AES-256-GCM with a key derived inside the enclave (from Phala's injected entropy or a sealed random key generated at first boot)
 - [ ] 2a.3 — Persist registry on every mutating operation (add, revoke); load at startup; fail-safe to empty registry on corrupt/missing file
 - [ ] 2a.4 — Add `--legacy-token` startup flag: when set, single `COCO_PHANTOM_TOKEN` env var works as before (one-release migration path for existing deployments)
@@ -55,6 +68,7 @@ Replaces the single `COCO_PHANTOM_TOKEN` env var with a named, per-client token 
 
 ### 3a. Per-request policy enforcement
 
+- [ ] 3a.0 — Evaluate allowlist *before* credential resolution. Block the request and return `403` without touching the credential store if the target host+path is not in the allowlist. This is the correct order: a timing side-channel leaks credential existence if resolution happens first.
 - [ ] 3a.1 — Implement route allowlist check in proxy handler: if `TokenRecord.routes_allowlist` is non-empty and the request prefix is not in it, return `403 Forbidden`
 - [ ] 3a.2 — Implement daily request counter per token: atomic in-memory counter, reset at UTC midnight, persisted to `/data/counters.enc` on update. Reject with `429 Too Many Requests` when `budget_daily_requests` is exceeded
 - [ ] 3a.3 — Implement approximate daily token counter for LLM routes (anthropic, openai): parse `Content-Length` of request + response as proxy for token consumption (rough estimate; flag as approximate in audit log). Reject with `429` when `budget_daily_tokens` exceeded
@@ -63,7 +77,9 @@ Replaces the single `COCO_PHANTOM_TOKEN` env var with a named, per-client token 
 
 ### 3b. Append-only structured audit log
 
+- [ ] 3b.0 — Implement response body credential redaction: after receiving upstream response, scan body for any injected credential value; replace with `[REDACTED_BY_COCO]` before forwarding to caller. Closes the credential-echo exfiltration path (API returns the key you sent it in an error message — agent then reads it). Keep a list of active credential values in-memory; wipe on revoke.
 - [ ] 3b.1 — Define `AuditEntry`: `timestamp`, `token_id`, `token_name`, `route`, `method`, `upstream_status`, `request_bytes`, `response_bytes`, `approx_tokens: Option<u64>`, `policy_action: Allow|DenyRoute|DenyBudget|DenyExpiry`
+  - Audit completeness note: if an agent holds its own token and calls GitHub/OpenAI directly (bypassing CoCo), that call is invisible to this log. This is acceptable — CoCo's protected credentials are not involved. Document this scope boundary explicitly in DEPLOY.md rather than framing it as an egress enforcement gap.
 - [ ] 3b.2 — Write one JSON line per request to `/data/audit.log` (newline-delimited JSON). File opened in append mode; no rotation in v1 (rotation is v1.x)
 - [ ] 3b.3 — Implement `GET /admin/audit` — returns last N entries (default 100, `?limit=N`). Query param `?token_id=<uuid>` filters by token
 - [ ] 3b.4 — Optional S3 sink: if `COCO_AUDIT_S3_BUCKET` and `COCO_AUDIT_S3_PREFIX` are set, flush completed log lines to S3 in background (best-effort, non-blocking)
@@ -76,8 +92,9 @@ Replaces the single `COCO_PHANTOM_TOKEN` env var with a named, per-client token 
 
 ### 4a. Sealed credential store
 
-- [ ] 4a.1 — Implement encrypted credential store: AES-256-GCM, key sealed inside TEE, persisted to `/data/credentials.enc`. Schema: `{ "<name>": { "value": str, "inject_header": str, "format": str } }`
-- [ ] 4a.2 — Implement `POST /admin/credentials` — add/update credential: body `{ "name": str, "value": str, "inject_header": str?, "format": str? }`
+- [ ] 4a.1 — Implement encrypted credential store: AES-256-GCM, key sealed inside TEE, persisted to `/data/credentials.enc`. Schema: `{ "<name>": { "value": str, "inject_header": str, "format": str, "upstream_scope": str? } }`
+  - `upstream_scope`: optional host+path prefix this credential is bound to (e.g. `api.openai.com/v1/*`). If set, gateway rejects injection into any request that doesn't match — credential-level scoping, not just token-level. Inspired by OneCLI's per-secret host binding.
+- [ ] 4a.2 — Implement `POST /admin/credentials` — add/update credential: body `{ "name": str, "value": str, "inject_header": str?, "format": str?, "upstream_scope": str? }`
 - [ ] 4a.3 — Implement `DELETE /admin/credentials/:name` — remove credential
 - [ ] 4a.4 — Implement `GET /admin/credentials` — list credential names (never values)
 - [ ] 4a.5 — Update route resolution: prefer sealed credentials over env var fallback; env vars remain as a backward-compatible fallback
@@ -95,8 +112,17 @@ Replaces the single `COCO_PHANTOM_TOKEN` env var with a named, per-client token 
 
 ### 4c. End-to-end test + release
 
-- [ ] 4c.1 — Extend `scripts/test-e2e.sh` to cover: registry token creation, routing enforcement (allowlist), budget cap (mock), revocation, audit log entry verified
+- [ ] 4c.1 — Extend `scripts/test-e2e.sh` to cover: registry token creation, routing enforcement (allowlist checked before credential resolution), budget cap (mock), revocation, credential-echo redaction, audit log entry verified with `token_name`
 - [ ] 4c.2 — Tag `v1.0.0`; publish release notes against the v1 definition of done in `product.md`
+
+---
+
+## Post-v1 ideas (don't build now, don't forget)
+
+- **Derived credential injection**: instead of injecting the raw key, derive a short-lived scoped token inside the TEE (pre-signed URL, short-TTL JWT) and inject that. The real key never leaves even at the network layer. Natural evolution of the HSM analogy.
+- **`HTTPS_PROXY` transport mode**: allow any HTTP client to use CoCo without `BASE_URL` reconfiguration. Zero code changes for the agent. OneCLI's biggest UX win.
+- **`GET /attest` pinning in `coco token create`**: embed the current MRTD in the token record at creation time. A client can verify their phantom token was issued by the same binary version it can attest today. Closes the "trust on first use" window.
+- **Workload identity (no static credentials at all)**: agent proves its TEE identity to CoCo; CoCo derives an OAuth access token on the fly from a root signing key sealed in the enclave. Agent never receives any credential, static or derived. This is the Aembit model but with hardware attestation as root of trust instead of IAM.
 
 ---
 
