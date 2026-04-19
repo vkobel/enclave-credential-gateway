@@ -4,6 +4,19 @@
 > Current state: Phase 1a complete (plain proxy). Phase 1b (CVM attestation) is in-flight.
 > Goal: achieve the v1 promise — deploy once, mint phantoms, audit, revoke.
 
+## Standards anchor
+
+CoCo implements a TEE-backed RFC 8693 Security Token Service.
+- The phantom token is the `subject_token` (who is acting).
+- The TEE is the STS (the authority that decides what rights to grant).
+- The injected upstream credential — or in post-v1, a short-lived derived JWT — is the output `access_token`.
+- The `upstream_scope` field on a credential record is the RFC 8693 `resource`/`audience` constraint.
+- Post-v1: phantom token records carry a `may_act` whitelist of which tokens may trigger an exchange for a given credential.
+
+This is not over-engineering for v1. It is vocabulary. Using it in DEPLOY.md and product.md costs nothing and positions CoCo correctly against both classical KMS and proxy-only tools.
+
+---
+
 ## Mental model
 
 OneCLI and AgentSecrets protect credentials from the agent.
@@ -15,6 +28,102 @@ An HSM answers: "give me data, I'll sign it, here's the signature."
 CoCo answers: "give me the request, I'll authenticate and execute it inside a hardware boundary, here's the response."
 The credential participates in the live request but is never transmitted to the requester.
 This is the model. Keep it sharp.
+
+---
+
+## CLI design — user stories
+
+Principles: noun-first verb-second (`coco cred add` not `coco add-cred`). `--json` flag on every command for scripting. Errors to stderr. One-line happy paths. Output is a table by default, machine-readable with `--json`.
+
+### Story 1 — First deploy (4 commands)
+```
+coco deploy phala
+# → builds image, pushes to GHCR, creates Phala CVM, waits for liveness
+# → prints: MRTD: a3f9…  ADMIN TOKEN: ccgw_admin_… (once, save it)
+
+coco verify https://gw.example
+# → TDX Quote: valid | Debug: false | MRTD: a3f9… | Binary: sha256:…
+
+coco cred add openai sk-proj-…  [--scope api.openai.com/v1/*]
+# → Sealed. Never echoed.
+
+coco token create --name claude-code [--scope api.openai.com] [--expires 30d]
+# → ccgw_3a9f…  (printed once)
+```
+
+### Story 2 — Give CI a narrowly scoped token
+```
+coco token create --name github-actions \
+  --scope api.openai.com/v1/embeddings \
+  --budget-requests 500 \
+  --expires 30d
+# → ccgw_ab12…
+
+coco token ls
+# NAME             SCOPE                            EXPIRES    CALLS
+# claude-code      api.openai.com/*                 never      142
+# github-actions   api.openai.com/v1/embeddings     29d        0
+```
+
+### Story 3 — Live audit
+```
+coco audit tail                       # streams all tokens
+coco audit tail --token claude-code   # filter by name
+# 20:14:03  claude-code  POST  api.openai.com/v1/chat         200  1.2s
+# 20:14:07  claude-code  POST  api.anthropic.com/v1/messages  403  DENIED:scope
+# 20:14:09  claude-code  POST  api.openai.com/v1/chat         200  0.8s
+```
+
+### Story 4 — Incident: revoke immediately
+```
+coco token revoke claude-code
+# Revoked. 0 further requests will be served for this token.
+```
+
+### Story 5 — Credential rotation (zero downtime)
+```
+coco cred rotate openai sk-proj-newkey…
+# Rotated. In-flight requests complete with previous value.
+# New value active for all subsequent requests.
+
+coco cred ls
+# NAME    SCOPE                  ROTATED
+# openai  api.openai.com/*       2m ago
+# github  api.github.com/*       never
+```
+
+### Story 6 — Auditor / new team member verifies gateway
+```
+coco verify https://gw.example
+# TDX Quote:   valid (Intel PCS)
+# Debug mode:  false
+# MRTD:        a3f9…  ← pin in client config
+# Binary:      ghcr.io/vkobel/coco-gateway:v1.0.0@sha256:…
+# Issued:      2026-04-19T18:00Z
+```
+
+### Command surface summary
+```
+coco deploy phala
+coco verify <url>
+
+coco token create --name <str> [--scope <host/path>] [--budget-requests <n>] [--budget-tokens <n>] [--expires <Nd>]
+coco token ls [--json]
+coco token revoke <name|id>
+
+coco cred add <name> <value> [--scope <host/path>] [--header <str>]
+coco cred rotate <name> <new-value>
+coco cred ls [--json]
+coco cred rm <name>
+
+coco audit tail [--token <name>] [--limit <n>]
+coco audit grep --token <name> [--since <duration>] [--json]
+
+coco status    # gateway liveness + attestation summary
+```
+
+Config: `~/.config/coco/config.toml` (or `COCO_GATEWAY_URL` + `COCO_ADMIN_TOKEN` env vars).
+The `coco` binary never touches credential values after `cred add` — it sends them over mTLS to the admin API and they are sealed inside the TEE immediately.
 
 ---
 
