@@ -2,49 +2,137 @@
 
 ## What this is
 
-A small Rust HTTP proxy you deploy once into a TEE. It holds your real
-upstream API keys (OpenAI, Anthropic, GitHub, …) and gives your agents
-**phantom tokens** in their place — scoped, revocable credentials that are
-worthless outside your gateway. The gateway validates the phantom in
-constant time, swaps in the real key, and forwards the request. Real keys
-never leave the enclave; your laptop, your CI, your phone all hold
-phantoms.
+A personal, hardware-attested credential hub that you deploy once and every
+agent you run connects to. It holds every API key, bot token, and service
+credential you own — GitHub, Telegram, Stripe, OpenAI, Anthropic, anything
+that today lives in a `.env`, a config file, or a shell export. Your agents
+never receive those values. They receive **phantom tokens** — scoped,
+revocable identifiers that are worthless outside your gateway. The gateway
+validates the phantom, injects the real credential into the live HTTP
+request inside the hardware boundary, and forwards the result. The real key
+never leaves the enclave.
+
+CoCo is to AI agents what a hardware password manager is to browsers —
+except the credentials never leave the device even to fill a form,
+because CoCo fills the form itself.
 
 The core insight: **credentials are infrastructure, not agent state.**
+
+### Why not a local proxy?
+
+Local proxies (OneCLI, AgentSecrets, nono's proxy mode) are a meaningful
+security step up from `.env` files. They protect credentials from the agent
+process. CoCo protects credentials from *everyone* — including the
+infrastructure operator. And unlike any local proxy, CoCo is a single
+network-accessible hub: one deployment, every agent.
+
+| | Local proxy | CoCo (TEE) |
+|---|---|---|
+| Agent can’t read the key | ✅ | ✅ |
+| Operator can’t read the key | ❌ host access = full access | ✅ enclave boundary |
+| Works from any device / CI | ❌ local only | ✅ network-accessible |
+| One change updates all agents | ❌ restart every proxy | ✅ gateway is the source of truth |
+| Cryptographically verifiable binary | ❌ | ✅ TDX attestation + MRTD |
+| Audit trail is tamper-resistant | ❌ process can lie | ✅ log produced inside attested binary |
+
+A local proxy is a baby step. CoCo is the destination.
+
+Technically: CoCo is a TEE-backed RFC 8693 Security Token Service. The
+phantom token is the `subject_token`; the TEE is the STS; the injected
+credential — or a short-lived derivative of it — is the output
+`access_token`. The credential participates in the live HTTP request inside
+a hardware boundary. This is closer to an HSM than to a vault: an HSM signs
+data on your behalf without exposing the key; CoCo authenticates HTTP
+requests on your behalf without exposing the credential.
 
 ---
 
 ## Who v1 is for
 
-**You. One technical AI user with paid API keys and several places that
-need to use them** — Claude Code on a laptop, an agent on a desktop, a CI
-job, maybe a phone shortcut. Your agents don't just call LLMs: they open
-PRs with `gh`, send notifications to Telegram, update Linear issues, post
-to Slack, edit Notion pages. Every one of those is another real credential
-sitting on every host you run an agent from. You are tired of:
+**You. One technical AI user running multiple agents across multiple
+devices, tired of managing credentials the way it’s done today.**
 
-- Pasting `sk-…` keys and PATs into config files on every machine.
-- Not knowing which agent burned through your monthly budget.
-- Rotating one leaked key in seven places.
-- Trusting every tool you install with full provider access.
+The problem looks like this. You have a `.env` on your laptop for Claude
+Code. A separate config on your desktop. An `OPENAI_API_KEY` in your CI
+secrets. A `GITHUB_TOKEN` and `TELEGRAM_BOT_TOKEN` in an n8n installation
+somewhere. Your agents don’t just call LLMs: they open PRs with `gh`,
+send notifications to Telegram, update Linear issues, post to Slack, edit
+Notion pages. Every one of those is another real credential sitting on
+every host you run an agent from.
 
-You are not a regulated enterprise. You don't need MDM, OIDC, or
+Every time you rotate a key you hunt down every place it lives. Every time
+you add a new agent you copy credentials to one more location. Every agent
+holds full, unrestricted, permanent access to every key it was given.
+
+CoCo collapses this: deploy once, add your credentials once, point every
+agent at the same gateway. You are tired of:
+
+- Credentials scattered across `.env` files, config files, shell exports,
+  and CI secret panels on multiple machines.
+- Rotating one leaked key in seven places, missing two, finding out later.
+- Having no idea which agent called which API at 3am.
+- Every agent holding full unrestricted permanent access to every key.
+- Trusting every tool you install not to read your credential files.
+
+You are not a regulated enterprise. You don’t need MDM, OIDC, or
 hardware-attested clients. You trust your own laptop. You want a personal
-key vault that lives in a place even *you* can't accidentally `cat`.
+credential hub that is verifiably isolated — a place even *you* can’t
+accidentally `cat` — and that all your agents connect to instead of
+holding their own copies.
 
 (The enterprise story — mutual attestation, MDM-bound devices, signed
-receipts — is real, and it's the long-term commercial direction. It is
+receipts — is real and is the long-term commercial direction. It is
 deliberately out of scope for v1. See the roadmap.)
 
 ---
 
 ## The v1 promise
 
-> *Deploy once. Add your real keys once. Mint a phantom per agent.
-> Point every agent at the gateway. Watch the audit log to see who
-> spent what. Revoke a phantom in one command when you're done.*
+> *Deploy once. Add every credential once — LLM keys, GitHub tokens,
+> Telegram bots, all of it. Mint a phantom per agent. Point every agent
+> at the gateway. One credential change propagates everywhere instantly.
+> Watch the audit log to see who called what and when. Revoke any agent
+> in one command.*
 
-Single user. Multiple clients. One vault. Verifiable hardware isolation.
+Single user. Every agent. Every credential. One hub. Verifiable hardware isolation.
+
+### What “every credential” means
+
+CoCo is not only for LLM APIs. It is for any credential that today lives
+in an agent’s environment and is consumed over HTTP:
+
+- **LLM APIs:** OpenAI, Anthropic, Mistral, Groq, …
+- **Developer tools:** GitHub PAT, GitLab token, npm auth, …
+- **Messaging:** Telegram Bot API token, Slack bot token, Discord, …
+- **SaaS tools:** Stripe, Sendgrid, Notion, Linear, Airtable, …
+- **Self-hosted services:** anything behind Bearer or a custom header
+
+If it ends up in a `.env` and is consumed over HTTP, it belongs here.
+Agents stop holding credentials. They hold phantoms.
+
+### The central-hub model
+
+```
+  TODAY
+  ─────
+  claude-code (laptop)      → OPENAI_KEY from ~/.env
+  ci-runner                 → OPENAI_KEY from GitHub Secrets
+  telegram-bot (VPS)        → TELEGRAM_TOKEN from /etc/systemd/…
+  n8n workflow              → GITHUB_TOKEN from n8n credential store
+  → 4 locations. Key rotated once = 3 missed. Zero audit trail.
+
+  WITH COCO
+  ─────────
+  claude-code (laptop)   phantom ccgw_a1…  ─┐
+  ci-runner              phantom ccgw_b2…  ─┤
+  telegram-bot (VPS)     phantom ccgw_c3…  ─┼─▶  CoCo TEE gateway  ─▶  upstream APIs
+  n8n workflow           phantom ccgw_d4…  ─┘
+  → 1 location. Key rotated once = propagates immediately to all agents.
+    Full per-agent audit trail.
+```
+
+Credentials live in exactly one place. Phantoms are worthless outside the
+gateway. Rotation is a single command.
 
 ---
 
@@ -122,27 +210,71 @@ minutes**, end to end:
 ## Architecture (v1)
 
 ```
-┌─────────────────┐                     ┌──────────────────────────────────┐
-│ Laptop / CI /   │                     │ Phala TDX CVM                    │
-│ phone / etc.    │                     │                                  │
-│                 │   phantom token     │  ┌────────────────────────────┐  │
-│   ┌──────────┐  │  ───────────────▶   │  │ coco-gateway               │  │
-│   │ agent    │──┼─────────────────────┼─▶│  - phantom registry        │  │
-│   │ (any SDK)│  │   over TLS          │  │  - per-token policy        │  │
-│   └──────────┘  │                     │  │  - audit log               │  │
-│                 │                     │  │  - encrypted cred store    │  │
-│   ┌──────────┐  │                     │  │  - GET /attest (TDX quote) │  │
-│   │ coco CLI │──┼─────────────────────┼─▶│  - /admin (admin token)    │  │
-│   └──────────┘  │   admin token       │  └─────────────┬──────────────┘  │
-└─────────────────┘                     │                │                 │
-                                        │                ▼ (real key)      │
-                                        │         upstream API (TLS)       │
-                                        └──────────────────────────────────┘
+ ┌──────────────────────────────────────────────┐
+ │  Your devices / infrastructure               │
+ │                                              │
+ │  claude-code (laptop)  phantom ccgw_a1…  ─┐  │
+ │  ci-runner             phantom ccgw_b2…  ─┤  │
+ │  telegram-bot (VPS)    phantom ccgw_c3…  ─┤  │
+ │  n8n workflow          phantom ccgw_d4…  ─┘  │
+ │                               │              │
+ │  coco CLI  ──admin-token──────┤              │
+ └──────────────────────────────┼──────────────┘
+                                │ TLS
+                                ▼
+           ┌────────────────────────────────────┐
+           │ Phala TDX CVM  (hardware boundary) │
+           │                                    │
+           │  coco-gateway                      │
+           │  ├─ phantom registry (enc)         │
+           │  ├─ credential store  (enc)        │
+           │  │    openai    → sk-proj-…        │
+           │  │    github    → ghp_…            │
+           │  │    telegram  → 7312…:AAH…       │
+           │  │    stripe    → sk_live_…        │
+           │  ├─ per-token policy               │
+           │  ├─ audit log                      │
+           │  └─ GET /attest  (TDX QuoteV4)     │
+           └──────────────┬─────────────────────┘
+                          │ real credential injected here
+              ┌───────────┼───────────┐
+              ▼           ▼           ▼
+         api.openai   api.github  api.telegram
 ```
 
-The agent sees only the gateway URL and a phantom. The CLI talks to the
-same gateway with an admin token. The real credential exists only inside
-the enclave.
+Every agent connects to the same gateway with a different phantom.
+Credentials live in one place. Rotation propagates immediately to all agents.
+The CLI is the only management surface. Real keys exist only inside the enclave.
+
+## How agents connect
+
+Two integration modes. The right choice depends on what the agent framework exposes:
+
+**Option A — Base URL rewrite** (LLM APIs and any SDK with a configurable base URL)
+
+Change `base_url` to point at the gateway. No code changes — the phantom
+goes in the same `Authorization` header the SDK already sends.
+
+```bash
+# OpenAI Python SDK
+client = OpenAI(base_url="https://gw.example/openai", api_key="ccgw_a1…")
+
+# Claude Code
+ANTHROPIC_BASE_URL=https://gw.example/anthropic ANTHROPIC_API_KEY=ccgw_a1… claude
+```
+
+**Option B — `HTTPS_PROXY`** (any HTTP tool with no configurable base URL: `gh`, Telegram SDK, curl, shell scripts, n8n HTTP nodes)
+
+```bash
+export HTTPS_PROXY=https://ccgw_a1…@gw.example
+# Every subsequent HTTP call — gh, curl, the Telegram library, anything — goes through CoCo.
+# The gateway strips the phantom from proxy credentials and injects the real credential.
+```
+
+Option A ships in v1. Option B (`CONNECT` proxy mode) is the first v1.x
+priority: it unlocks the non-LLM tool case (`gh`, Telegram, etc.) with
+zero per-agent configuration and is the natural path for agents that
+don’t expose a base URL setting.
 
 ---
 
@@ -268,12 +400,10 @@ should load in CoCo with minimal edits, and vice versa.
 
 ## Non-goals (forever)
 
-- **Not a general HTTPS forward proxy.** Only explicitly configured
-  upstreams. No `CONNECT`.
 - **Not a model router.** No model selection, prompt rewriting, completion
   caching, semantic routing.
 - **Not a Vault replacement** for non-agent workloads. CoCo is specifically
-  for "agent → external API" traffic.
+  for “agent → external API” HTTP traffic.
 - **Not a silver bullet for prompt injection.** Holding the credential
   outside the agent limits blast radius; policy and budgets contain a
   misbehaving agent. Nothing here makes the agent itself trustworthy.
