@@ -1,0 +1,44 @@
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct Config {
+    pub gateway_url: String,
+    pub admin_token: Option<String>,
+    #[serde(default)]
+    pub tokens: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn path() -> PathBuf {
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("coco")
+            .join("config.toml")
+    }
+
+    pub fn load() -> Result<Config> {
+        let path = Self::path();
+        if !path.exists() {
+            anyhow::bail!("Config not found at {}. Run: mkdir -p ~/.config/coco && create config.toml", path.display());
+        }
+        let data = std::fs::read_to_string(&path)
+            .context("Failed to read config")?;
+        let config: Config = toml::from_str(&data)
+            .context("Failed to parse config")?;
+        Ok(config)
+    }
+
+    #[allow(dead_code)]
+    pub fn save(&self) -> Result<()> {
+        let path = Self::path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let data = toml::to_string_pretty(self)?;
+        std::fs::write(&path, data)?;
+        Ok(())
+    }
+}
