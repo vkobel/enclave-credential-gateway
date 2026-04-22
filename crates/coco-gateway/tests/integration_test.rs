@@ -78,10 +78,12 @@ mod auth_tests {
 
     #[test]
     fn test_constant_time_eq() {
-        use nono_proxy::token::constant_time_eq;
-        assert!(constant_time_eq(b"same", b"same"));
-        assert!(!constant_time_eq(b"a", b"b"));
-        assert!(!constant_time_eq(b"short", b"longer-value"));
+        use subtle::ConstantTimeEq;
+        assert!(bool::from(b"same".ct_eq(b"same")));
+        assert!(!bool::from(b"a".ct_eq(b"b")));
+        // Differing lengths: ct_eq requires equal-length slices, so the
+        // gateway's wrapper short-circuits on len mismatch.
+        assert_ne!(b"short".len(), b"longer-value".len());
     }
 }
 

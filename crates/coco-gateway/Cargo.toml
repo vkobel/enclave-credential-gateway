@@ -12,7 +12,6 @@ name = "coco-gateway"
 path = "src/main.rs"
 
 [dependencies]
-nono-proxy = { git = "https://github.com/always-further/nono", rev = "98b140f782550b6c47766e2e8e49224f070bbc4e", package = "nono-proxy" }
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
 hyper = { version = "1", features = ["http1", "client"] }

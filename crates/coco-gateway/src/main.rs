@@ -9,7 +9,7 @@
 //!   2. /etc/coco/profile.json (default path)
 //!   3. Built-in defaults (openai / anthropic / github / httpbin)
 //!
-//! ## Phantom token auth (per nono's pattern)
+//! ## Phantom token auth
 //!
 //! The client sends the phantom token in the SAME HEADER it would use for a real
 //! credential. For example, Claude Code with `ANTHROPIC_API_KEY=<phantom>` sends

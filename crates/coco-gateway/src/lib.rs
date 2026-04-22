@@ -1,7 +1,13 @@
 //! Shared logic for coco-gateway — exported for integration tests.
 
-use nono_proxy::token::constant_time_eq;
+use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
+
+/// Constant-time byte comparison. Returns `false` immediately on length
+/// mismatch (length is not secret); otherwise compares in constant time.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.ct_eq(b).into()
+}
 
 /// Validate a `Proxy-Authorization` header against the phantom token.
 ///
