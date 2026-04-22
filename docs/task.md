@@ -5,8 +5,8 @@
 | Phase | Description | Status |
 |---|---|---|
 | 1a | Plain proxy — phantom token auth, profile routing, multi-source credential injection | **done** |
-| 1c | Remote deploy, profile library, lightweight token registry, local `coco` CLI | **next** |
-| 1b | CVM attestation — `GET /attest`, TDX QuoteV4, Phala deploy | not started |
+| 1c | Remote deploy, profile library, lightweight token registry, local `coco` CLI | **done** |
+| 1b | CVM attestation — `GET /attest`, TDX QuoteV4, Phala deploy | **next** |
 | 2 | Full token registry — encrypted store, admin API, policy | not started |
 | 3 | Per-token policy + audit log | not started |
 | 4 | Sealed credential store + full CLI + polish | not started |
@@ -135,21 +135,21 @@ Goal: a remotely deployable gateway that any agent or tool can connect to, with 
 
 ### 1c-A. Remote deploy infrastructure
 
-- [ ] 1c.1 — Add `GET /health` unauthenticated endpoint returning `200 OK {"status":"ok"}`.
-- [ ] 1c.2 — Add `strip_prefix` field to route config (optional string). When set, strip that prefix from the incoming path before forwarding. Needed for `GH_HOST` support: GitHub Enterprise clients route to `/api/v3/...`; stripping `/api/v3` before forwarding to `api.github.com` makes it transparent.
-- [ ] 1c.3 — Add Caddy service to `docker-compose.yml` for automatic TLS termination (Let's Encrypt). Caddy proxies `443 → 8080`. Gateway itself stays HTTP-only behind it.
+- [x] 1c.1 — Add `GET /health` unauthenticated endpoint returning `200 OK {"status":"ok"}`.
+- [x] 1c.2 — Add `strip_prefix` field to route config (optional string). When set, strip that prefix from the incoming path before forwarding. Needed for `GH_HOST` support: GitHub Enterprise clients route to `/api/v3/...`; stripping `/api/v3` before forwarding to `api.github.com` makes it transparent.
+- [x] 1c.3 — Add Caddy service to `docker-compose.yml` for automatic TLS termination (Let's Encrypt). Caddy proxies `443 → 8080`. Gateway itself stays HTTP-only behind it.
 
 ### 1c-B. Named service profile library
 
 Replace the single `examples/profile.json` with a `profiles/` directory of named per-service files. The deploy-time `profile.json` merges whichever services you want.
 
-- [ ] 1c.4 — Define the extended route schema fields needed by new profiles:
+- [x] 1c.4 — Define the extended route schema fields needed by new profiles:
   - `strip_prefix: Option<String>` — path prefix to strip before forwarding (existing 1c.2)
   - `inject_mode: "header" | "url_path" | "query_param"` — where to inject the credential (default: `"header"`)  
     - `url_path`: replaces a `{credential}` placeholder in the upstream path template (needed for Telegram: `/bot{credential}/...`)
     - `query_param`: appends credential as a query parameter with a configured key name
   - `inject_param: Option<String>` — query param name when `inject_mode = "query_param"`
-- [ ] 1c.5 — Ship the following named profiles in `profiles/`:
+- [x] 1c.5 — Ship the following named profiles in `profiles/`:
 
   | File | Upstream | inject_mode | Notes |
   |---|---|---|---|
@@ -162,29 +162,29 @@ Replace the single `examples/profile.json` with a `profiles/` directory of named
   | `telegram.json` | api.telegram.org | url_path | /bot{credential}/... |
   | `together.json` | api.together.xyz | header | Authorization: Bearer (OpenAI-compat) |
 
-- [ ] 1c.6 — Update `examples/profile.json` to demonstrate profile composition (include anthropic + openai + github + groq as a starter set).
-- [ ] 1c.7 — Add profile validation at startup: log a warning (not a fatal error) for any route with `inject_mode = url_path` that has no `{credential}` placeholder in its upstream URL.
+- [x] 1c.6 — Update `examples/profile.json` to demonstrate profile composition (include anthropic + openai + github + groq as a starter set).
+- [x] 1c.7 — Add profile validation at startup: log a warning (not a fatal error) for any route with `inject_mode = url_path` that has no `{credential}` placeholder in its upstream URL.
 
 ### 1c-C. Lightweight token registry
 
 Replaces the single `COCO_PHANTOM_TOKEN` env var with a named multi-token registry. No encryption yet (that comes with TEE in 1b/2). Tokens are stored in a JSON file, hashed at rest.
 
-- [ ] 1c.8 — Define `TokenRecord`: `id` (UUID), `name` (string), `scope` (optional list of route prefixes this token is allowed to call), `created_at`, `status: Active|Revoked`.
-- [ ] 1c.9 — Implement `TokenRegistry`: load from `/data/tokens.json` at startup; persist on every mutation. Hash tokens with `blake3` (fast, not a password hash — the token itself is 256-bit random so brute force is not a concern). Fail-safe to empty registry on missing/corrupt file.
-- [ ] 1c.10 — Admin API, protected by `COCO_ADMIN_TOKEN` env var (set at deploy time, validated constant-time):
+- [x] 1c.8 — Define `TokenRecord`: `id` (UUID), `name` (string), `scope` (optional list of route prefixes this token is allowed to call), `created_at`, `status: Active|Revoked`.
+- [x] 1c.9 — Implement `TokenRegistry`: load from `/data/tokens.json` at startup; persist on every mutation. Hash tokens with `blake3` (fast, not a password hash — the token itself is 256-bit random so brute force is not a concern). Fail-safe to empty registry on missing/corrupt file.
+- [x] 1c.10 — Admin API, protected by `COCO_ADMIN_TOKEN` env var (set at deploy time, validated constant-time):
   - `POST /admin/tokens` — body `{"name": str, "scope": [str]?}` → generates a 32-byte hex token, stores hashed, returns `{"id": uuid, "name": str, "token": "ccgw_<hex>"}` (token shown once)
   - `GET /admin/tokens` — list all records (name, id, scope, status, created_at — never the token value)
   - `DELETE /admin/tokens/:id` — revoke (sets status to Revoked, persists)
-- [ ] 1c.11 — Update auth middleware to validate against the token registry (constant-time hash comparison). Attach matched `TokenRecord` to request extensions so scope can be checked by the proxy handler.
-- [ ] 1c.12 — Enforce scope: if `TokenRecord.scope` is non-empty and the request's route prefix is not in it, return `403 Forbidden`. Evaluate before credential resolution.
-- [ ] 1c.13 — Keep `COCO_PHANTOM_TOKEN` as a legacy fallback: if set and the registry lookup fails, fall back to the single-token check (backwards compat for existing deployments).
-- [ ] 1c.14 — Unit tests: token creation round-trip, revoked token rejected, scope enforcement, legacy fallback.
+- [x] 1c.11 — Update auth middleware to validate against the token registry (constant-time hash comparison). Attach matched `TokenRecord` to request extensions so scope can be checked by the proxy handler.
+- [x] 1c.12 — Enforce scope: if `TokenRecord.scope` is non-empty and the request's route prefix is not in it, return `403 Forbidden`. Evaluate before credential resolution.
+- [x] 1c.13 — Keep `COCO_PHANTOM_TOKEN` as a legacy fallback: if set and the registry lookup fails, fall back to the single-token check (backwards compat for existing deployments).
+- [x] 1c.14 — Unit tests: token creation round-trip, revoked token rejected, scope enforcement, legacy fallback.
 
 ### 1c-D. Local `coco` CLI
 
 A single Rust binary (`crates/coco-cli`) with minimal subcommands. Goal: one command activates the right env vars (and tool-specific config files) for the current shell session.
 
-- [ ] 1c.15 — Scaffold `crates/coco-cli` with clap. Config file at `~/.config/coco/config.toml`:
+- [x] 1c.15 — Scaffold `crates/coco-cli` with clap. Config file at `~/.config/coco/config.toml`:
   ```toml
   gateway_url = "https://gw.example.com"
   admin_token = "ccgw_admin_..."  # optional, only needed for token management
@@ -193,7 +193,7 @@ A single Rust binary (`crates/coco-cli`) with minimal subcommands. Goal: one com
   claude-code  = "ccgw_3a9f..."
   ci-runner    = "ccgw_ab12..."
   ```
-- [ ] 1c.16 — `coco env <token-name>` — prints `export` statements for every tool that the gateway supports, using the named token as the phantom. Output is eval'd in the shell: `eval $(coco env claude-code)`. Emits:
+- [x] 1c.16 — `coco env <token-name>` — prints `export` statements for every tool that the gateway supports, using the named token as the phantom. Output is eval'd in the shell: `eval $(coco env claude-code)`. Emits:
   ```bash
   export ANTHROPIC_BASE_URL=https://gw.example.com/anthropic
   export ANTHROPIC_API_KEY=ccgw_3a9f...
@@ -203,11 +203,11 @@ A single Rust binary (`crates/coco-cli`) with minimal subcommands. Goal: one com
   export GH_TOKEN=ccgw_3a9f...
   export OLLAMA_HOST=https://gw.example.com/ollama
   ```
-- [ ] 1c.17 — `coco env <token-name> --codex` — additionally writes `~/.codex/config.toml` with `openai_base_url` set (Codex CLI does not read `OPENAI_BASE_URL` from env; requires its own config file).
-- [ ] 1c.18 — `coco token create --name <str> [--scope <csv>]` — calls `POST /admin/tokens`, prints the token value once.
-- [ ] 1c.19 — `coco token ls` — calls `GET /admin/tokens`, pretty-prints table.
-- [ ] 1c.20 — `coco token revoke <name|id>` — calls `DELETE /admin/tokens/:id`.
-- [ ] 1c.21 — Write `docs/USING.md`: copy-paste setup for Claude Code, Codex, gh CLI, and Ollama on a remote gateway. Shows both `eval $(coco env ...)` flow and manual env var approach.
+- [x] 1c.17 — `coco env <token-name> --codex` — additionally writes `~/.codex/config.toml` with `openai_base_url` set (Codex CLI does not read `OPENAI_BASE_URL` from env; requires its own config file).
+- [x] 1c.18 — `coco token create --name <str> [--scope <csv>]` — calls `POST /admin/tokens`, prints the token value once.
+- [x] 1c.19 — `coco token ls` — calls `GET /admin/tokens`, pretty-prints table.
+- [x] 1c.20 — `coco token revoke <name|id>` — calls `DELETE /admin/tokens/:id`.
+- [x] 1c.21 — Write `docs/USING.md`: copy-paste setup for Claude Code, Codex, gh CLI, and Ollama on a remote gateway. Shows both `eval $(coco env ...)` flow and manual env var approach.
 
 ---
 

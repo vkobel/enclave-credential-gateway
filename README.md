@@ -2,115 +2,256 @@
 
 A credential proxy for AI agents: agents authenticate with a phantom token, the gateway validates it and injects the real upstream API key, so secrets never touch the agent's host.
 
-A remotely deployable, hardware-attested service.
+Remotely deployable with automatic TLS (Caddy). Hardware-attested deployment on Phala TDX CVM coming in Phase 1b.
 
 ---
 
-## Quickstart
+## Quickstart — Local dev
 
-**1. Generate a phantom token** — the shared secret your agents use as their API key:
-
-```bash
-export COCO_PHANTOM_TOKEN=$(openssl rand -hex 32)
-echo $COCO_PHANTOM_TOKEN   # save this, you'll pass it to agents
-```
-
-**2. Set your upstream credentials** and start the gateway:
+**1. Set your credentials and start the gateway:**
 
 ```bash
+export COCO_ADMIN_TOKEN=$(openssl rand -hex 32)   # admin API secret — save this
+export ANTHROPIC_API_KEY=sk-ant-...
 export OPENAI_API_KEY=sk-...
-export ANTHROPIC_API_KEY=sk-ant-...    # API key (sk-ant-api...) or Claude Code OAuth token (sk-ant-oat...)
 export GITHUB_TOKEN=ghp_...
-export HTTPBIN_TOKEN=any-value          # any string — used for smoke tests
+export HTTPBIN_TOKEN=any-value                     # smoke test only
 
 docker compose up -d --build
 ```
 
-Routes are loaded from [`examples/profile.json`](./examples/profile.json). Edit it to add or remove upstreams; restart with `docker compose up -d --build`.
+`COCO_ADMIN_TOKEN` is required. The gateway refuses to start without it.
 
-**3. Call any upstream through the gateway** — real keys never leave the gateway:
+**2. Mint a phantom token for your agent:**
 
 ```bash
-# Smoke test — no real credential needed
-curl http://localhost:8080/httpbin/bearer \
-  -H "Proxy-Authorization: Bearer $COCO_PHANTOM_TOKEN"
-
-# OpenAI
-curl -X POST http://localhost:8080/openai/v1/chat/completions \
-  -H "Proxy-Authorization: Bearer $COCO_PHANTOM_TOKEN" \
+curl -s -X POST http://localhost:8080/admin/tokens \
+  -H "Authorization: Bearer $COCO_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"ping"}]}'
-
-# Anthropic
-curl -X POST http://localhost:8080/anthropic/v1/messages \
-  -H "Proxy-Authorization: Bearer $COCO_PHANTOM_TOKEN" \
-  -H "Content-Type: application/json" \
-  -H "anthropic-version: 2023-06-01" \
-  -d '{"model":"claude-haiku-4-5-20251001","max_tokens":64,"messages":[{"role":"user","content":"ping"}]}'
+  -d '{"name":"laptop","scope":["anthropic","openai","api"]}' | jq .
+# { "id": "...", "name": "laptop", "token": "ccgw_...", "scope": [...], ... }
 ```
 
-The gateway returns `407` on a missing/wrong phantom token, `404` on an unknown prefix, `503` if the upstream credential env var is absent.
+The `token` field is shown **once**. Save it. `scope` is optional — omit it to allow all routes.
+
+**3. Write the coco CLI config:**
+
+```toml
+# ~/.config/coco/config.toml
+gateway_url = "http://localhost:8080"
+admin_token = "<COCO_ADMIN_TOKEN>"
+
+[tokens]
+laptop = "ccgw_..."
+```
+
+**4. Activate your shell:**
+
+```bash
+eval $(coco env laptop)            # sets ANTHROPIC_BASE_URL, OPENAI_BASE_URL, GH_HOST, OLLAMA_HOST
+eval $(coco env laptop --codex)    # also writes ~/.codex/config.toml for Codex CLI
+```
+
+**5. Run agents — no real keys on the local machine:**
+
+```bash
+claude                      # Claude Code → gateway → Anthropic
+codex                       # Codex CLI   → gateway → OpenAI
+gh repo list                # gh CLI      → gateway → GitHub
+ollama run llama3.2         # Ollama      → gateway → your Ollama server
+```
 
 ---
 
-## Using Claude Code with no real credentials
+## Quickstart — Remote with TLS
 
-Point Claude Code at the gateway and give it the phantom token as its "API key". The gateway injects the real Anthropic credential server-side — no key on the local machine.
+**1. Point a domain at your server** (A record to the host IP).
 
-The gateway detects the token shape at inject time:
-- `sk-ant-oat...` (Claude Code OAuth token) → injected as `Authorization: Bearer <token>`
-- anything else (regular API key) → injected as `x-api-key: <key>`
+**2. Set env vars and start:**
 
 ```bash
-# 1. Start the gateway (accepts both API keys and Claude Code OAuth tokens)
-export COCO_PHANTOM_TOKEN=my-secret
-export ANTHROPIC_API_KEY=sk-ant-oat01-...   # or sk-ant-api... — gateway handles both
+export COCO_DOMAIN=gw.example.com
+export COCO_ADMIN_TOKEN=$(openssl rand -hex 32)
+export ANTHROPIC_API_KEY=sk-ant-...
+# ... other real credentials ...
+
 docker compose up -d --build
-
-# 2. Point Claude Code at the gateway (no real credential here)
-export ANTHROPIC_BASE_URL=http://localhost:8080/anthropic
-export ANTHROPIC_API_KEY=my-secret     # phantom token — gateway swaps in the real credential
-
-claude chat
+# Caddy auto-provisions a Let's Encrypt certificate for COCO_DOMAIN.
 ```
 
-Claude Code sends `x-api-key: my-secret` (or `Authorization: Bearer my-secret` when using an OAuth session). The gateway validates the phantom, strips it, and injects the real credential in the correct header before forwarding to `api.anthropic.com`.
+Caddy listens on 443 and reverse-proxies to the gateway on 8080. The gateway stays HTTP-only behind it.
+
+**3. Update your coco config:**
+
+```toml
+# ~/.config/coco/config.toml
+gateway_url = "https://gw.example.com"
+admin_token = "<COCO_ADMIN_TOKEN>"
+
+[tokens]
+laptop    = "ccgw_3a9f..."
+ci-runner = "ccgw_ab12..."
+```
+
+**4. Health check:**
+
+```bash
+curl https://gw.example.com/health
+# {"status":"ok"}
+```
+
+---
+
+## Admin API
+
+All `/admin/*` routes require `Authorization: Bearer <COCO_ADMIN_TOKEN>`.
+
+**Create a token:**
+```bash
+curl -s -X POST https://gw.example.com/admin/tokens \
+  -H "Authorization: Bearer $COCO_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"ci-runner","scope":["openai","anthropic"]}'
+```
+
+**List tokens:**
+```bash
+curl -s https://gw.example.com/admin/tokens \
+  -H "Authorization: Bearer $COCO_ADMIN_TOKEN" | jq .
+```
+
+**Revoke a token:**
+```bash
+curl -s -X DELETE https://gw.example.com/admin/tokens/<id> \
+  -H "Authorization: Bearer $COCO_ADMIN_TOKEN"
+```
+
+Token values are hashed (blake3) in `/data/tokens.json` and never returned after creation.
+
+---
+
+## coco CLI
+
+### Building coco
+
+```bash
+cargo build --release -p coco-cli
+cp target/release/coco /usr/local/bin/coco
+```
+
+### Token management
+
+```bash
+# Create a token
+coco token create --name laptop --scope anthropic,openai,api
+
+# List tokens
+coco token ls
+
+# Revoke by name
+coco token revoke laptop
+```
+
+### Shell activation
+
+`coco env <name>` emits `export` statements for every tool the gateway supports:
+
+```bash
+eval $(coco env laptop)
+```
+
+This sets:
+
+| Variable | Value |
+|---|---|
+| `ANTHROPIC_BASE_URL` | `https://gw.example.com/anthropic` |
+| `ANTHROPIC_API_KEY` | phantom token |
+| `OPENAI_BASE_URL` | `https://gw.example.com/openai` |
+| `OPENAI_API_KEY` | phantom token |
+| `GH_HOST` | `gw.example.com` |
+| `GH_TOKEN` | phantom token |
+| `OLLAMA_HOST` | `https://gw.example.com/ollama` |
+
+`--codex` additionally writes `~/.codex/config.toml` (Codex reads its own config, not `OPENAI_BASE_URL`):
+
+```bash
+eval $(coco env laptop --codex)
+```
+
+---
+
+## Profile Library
+
+Eight named service profiles ship in `profiles/`. The deploy-time `profile.json` composes whichever you need.
+
+| File | Upstream | inject_mode | Notes |
+|---|---|---|---|
+| `anthropic.json` | api.anthropic.com | header | `x-api-key` or `Authorization: Bearer` (OAuth token detection) |
+| `openai.json` | api.openai.com | header | `Authorization: Bearer` |
+| `github.json` | api.github.com | header | `Authorization: Bearer`; `api` route strips `/v3` prefix for `GH_HOST` |
+| `groq.json` | api.groq.com | header | OpenAI-compatible |
+| `elevenlabs.json` | api.elevenlabs.io | header | `xi-api-key` header |
+| `ollama.json` | configurable | header | `OLLAMA_HOST=https://gw.example.com/ollama` |
+| `telegram.json` | api.telegram.org | url_path | Token injected into URL: `/bot{credential}/...` |
+| `together.json` | api.together.xyz | header | OpenAI-compatible |
+
+`examples/profile.json` ships with anthropic + openai + github + httpbin as the starter set.
+
+---
+
+## Inject Modes
+
+The `inject_mode` field on a route controls where the credential is placed:
+
+| Mode | Behavior | Use case |
+|---|---|---|
+| `header` (default) | Inject into a request header | LLM APIs, GitHub, most REST APIs |
+| `url_path` | Replace `{credential}` placeholder in upstream URL path | Telegram Bot API |
+| `query_param` | Append as a query parameter | APIs requiring key in URL |
+
+The gateway logs a warning at startup if a `url_path` route has no `{credential}` placeholder in its upstream URL.
 
 ---
 
 ## How It Works
 
-The gateway accepts the phantom token from the **same header the SDK uses for a real credential**. SDKs work without modification.
-
 ```
-Claude Code / SDK
-  x-api-key: <phantom>           ──▶  coco-gateway
-  (or Authorization: Bearer ...)          │
-                                  validate token (constant-time)
-                                          │
-                                  match /<prefix>/ → upstream
-                                          │
-                                  strip phantom, inject real credential
-                                    x-api-key: <real-key>
-                                    (or Authorization: Bearer <key>)
-                                          │
-                                          ▼
-                                  api.anthropic.com (TLS)
+Agent (Claude Code / SDK / gh / curl)
+  phantom token in auth header      ──▶  coco-gateway
+                                            │
+                                    validate token (constant-time hash)
+                                    check scope (if token has routes list)
+                                            │
+                                    match /<prefix>/ → upstream config
+                                            │
+                                    strip phantom, inject real credential
+                                      inject_mode: header   → set header
+                                      inject_mode: url_path → rewrite URL
+                                            │
+                                            ▼
+                                    api.anthropic.com / api.openai.com / ... (TLS)
 ```
 
 Accepted phantom token locations (checked in order):
-1. `Proxy-Authorization: Bearer <token>` — generic, works with `curl` and test scripts
+1. `Proxy-Authorization: Bearer <token>` — explicit proxy credential
 2. Route's own auth header (`x-api-key`, `Authorization: Bearer`, etc.) — used by SDK clients
 
-**Known gap (POC):** Agents route through the gateway voluntarily via `BASE_URL`. A compromised agent can bypass by connecting directly upstream. Mitigate with egress firewall rules.
+Response codes:
+- `200` — success
+- `407` — missing or wrong phantom token
+- `403` — token valid but route not in its scope
+- `404` — unknown route prefix
+- `503` — upstream credential env var absent
+
+**Legacy fallback:** `COCO_PHANTOM_TOKEN` works as a fallback when registry lookup fails — backwards compatible with existing deployments.
 
 ---
 
 ## Custom Profiles
 
-Routes are defined in [`examples/profile.json`](./examples/profile.json) and mounted into the container. Edit that file to add any upstream.
+Routes are defined in `examples/profile.json` (or a custom path via `COCO_PROFILE`).
 
-**Single-source route** (one credential):
+**Single-source route:**
 
 ```json
 {
@@ -139,25 +280,26 @@ Routes are defined in [`examples/profile.json`](./examples/profile.json) and mou
 }
 ```
 
-The `prefix` field lets a single env var route to different headers based on token shape: OAuth tokens (`sk-ant-oat...`) inject as `Authorization: Bearer`, regular API keys fall through to `x-api-key`.
-
-**Single-source fields:**
+**Route fields:**
 
 | Field | Required | Default | Description |
 |---|---|---|---|
 | `upstream` | yes | — | HTTPS upstream base URL |
-| `credential_env` | yes | — | Env var holding the real credential |
-| `inject_header` | no | `Authorization` | Header to inject the credential into |
-| `credential_format` | no | `Bearer {}` | Format string; `{}` replaced with the credential |
+| `inject_mode` | no | `"header"` | `"header"`, `"url_path"`, or `"query_param"` |
+| `strip_prefix` | no | — | Strip this path prefix before forwarding (e.g. `/v3` for `GH_HOST`) |
+| `credential_env` | if no `credential_sources` | — | Env var holding the real credential |
+| `inject_header` | no | `Authorization` | Header to inject into (single-source) |
+| `credential_format` | no | `Bearer {}` | Format string; `{}` is replaced with the credential |
+| `credential_sources` | no | — | Ordered list of credential sources |
 
-**`credential_sources` fields** (each entry):
+**`credential_sources` entry fields:**
 
 | Field | Required | Default | Description |
 |---|---|---|---|
 | `env` | yes | — | Env var name |
 | `inject_header` | yes | — | Header to inject into |
 | `format` | no | `Bearer {}` | Format string |
-| `prefix` | no | — | If set, this source only matches when the credential value starts with this string |
+| `prefix` | no | — | Only match when the credential value starts with this string |
 
 ---
 
@@ -165,12 +307,16 @@ The `prefix` field lets a single env var route to different headers based on tok
 
 | Env var | Required | Default | Description |
 |---|---|---|---|
-| `COCO_PHANTOM_TOKEN` | yes | — | Shared secret agents use as their API key |
+| `COCO_ADMIN_TOKEN` | **yes** | — | Admin API secret. Gateway refuses to start without it. |
 | `COCO_LISTEN_PORT` | no | `8080` | Port to bind |
 | `COCO_PROFILE` | no | `/etc/coco/profile.json` | Profile file path |
+| `COCO_TOKENS_FILE` | no | `/data/tokens.json` | Token registry file path |
+| `COCO_PHANTOM_TOKEN` | no | — | Legacy single-token fallback (backwards compat) |
+| `COCO_DOMAIN` | no | — | Domain for Caddy TLS termination |
+| `ANTHROPIC_API_KEY` | — | — | Real Anthropic API key or OAuth token |
 | `OPENAI_API_KEY` | — | — | Real OpenAI key |
-| `ANTHROPIC_API_KEY` | — | — | Real Anthropic API key |
 | `GITHUB_TOKEN` | — | — | Real GitHub token |
+| `TELEGRAM_BOT_TOKEN` | — | — | Telegram bot token |
 | `HTTPBIN_TOKEN` | — | — | Any string (smoke tests) |
 
 ---
@@ -180,30 +326,44 @@ The `prefix` field lets a single env var route to different headers based on tok
 **Unit + integration tests** (no running gateway needed):
 
 ```bash
-cargo test
+cargo test --workspace
+# 33 tests: auth, proxy, registry, admin API, inject modes, scope enforcement
 ```
 
 **Live e2e tests** (starts gateway via docker compose, tears down on exit):
 
 ```bash
-export COCO_PHANTOM_TOKEN=test-phantom
-export HTTPBIN_TOKEN=anything           # any value
+export COCO_ADMIN_TOKEN=test-admin
+export HTTPBIN_TOKEN=anything
 ./scripts/test-e2e.sh
 
-# With real Anthropic API key (x-api-key path):
+# With real Anthropic API key:
 export ANTHROPIC_API_KEY=sk-ant-api-...
 ./scripts/test-e2e.sh
 
-# With Claude Code OAuth token (Authorization: Bearer path):
+# With Claude Code OAuth token:
 export ANTHROPIC_API_KEY=sk-ant-oat01-...
 COCO_TEST_ANTHROPIC_MODE=oauth ./scripts/test-e2e.sh
 
-# With real OpenAI credential:
+# With real OpenAI key:
 export OPENAI_API_KEY=sk-...
 ./scripts/test-e2e.sh
 ```
 
-Credentials not set are skipped (shown as `SKIP` in the output, not `FAIL`).
+Credentials not set are skipped (`SKIP`, not `FAIL`).
+
+**Smoke test without real credentials:**
+
+```bash
+# Start the gateway, then:
+TOKEN=$(curl -s -X POST http://localhost:8080/admin/tokens \
+  -H "Authorization: Bearer $COCO_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"smoke"}' | jq -r .token)
+
+curl http://localhost:8080/httpbin/bearer \
+  -H "Proxy-Authorization: Bearer $TOKEN"
+```
 
 ---
 
@@ -211,11 +371,11 @@ Credentials not set are skipped (shown as `SKIP` in the output, not `FAIL`).
 
 **Phase 1a — done.** Plain proxy on any Docker host. Phantom token auth, profile-based routing, multi-source credential injection.
 
-**Phase 1c — next.** Remote deploy with TLS (Caddy), path prefix stripping for `gh` CLI support, health endpoint.
+**Phase 1c — done.** Remote deploy with TLS (Caddy), named token registry with admin API, profile library (8 services), inject modes (header/url_path/query_param), local `coco` CLI with `env` and `token` subcommands.
 
-**Phase 1b — CVM attestation.** Promote to Phala Cloud TDX CVM. Add `GET /attest` (TDX QuoteV4).
+**Phase 1b — next.** CVM attestation — promote to Phala Cloud TDX CVM, add `GET /attest` (TDX QuoteV4), GHCR image build.
 
-**Phase 2+ — Policy, token registry, encrypted vaults, audit.**
+**Phase 2+.** Encrypted token store, per-token policy, audit log, sealed credential store, full CLI polish.
 
 See [`docs/task.md`](./docs/task.md) for the full task list and progress.
 
@@ -223,6 +383,7 @@ See [`docs/task.md`](./docs/task.md) for the full task list and progress.
 
 ## References
 
+- [`docs/USING.md`](./docs/USING.md) — copy-paste setup for Claude Code, Codex, gh CLI, Ollama, Telegram
 - [`docs/product.md`](./docs/product.md) — product vision
 - [`docs/task.md`](./docs/task.md) — task list and progress
 - [`docs/TEE-SECURITY.md`](./docs/TEE-SECURITY.md) — TEE security model

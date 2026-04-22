@@ -166,28 +166,19 @@ minutes**, end to end:
 
 ### What's in v1
 
-- TDX CVM deployment (Phase 1b, in flight).
+- ✅ Constant-time phantom validation, multi-source credential injection (`coco-gateway`).
+- ✅ Named token registry (blake3 hashed, atomic persistence). Admin API: `POST/GET/DELETE /admin/tokens`.
+- ✅ Scope enforcement: per-token route allowlist, 403 before credential resolution.
+- ✅ Route profile schema: `inject_mode` ∈ {`header`, `url_path`, `query_param`}, `strip_prefix`, prefix-based `credential_sources`.
+- ✅ Curated profiles: **OpenAI, Anthropic, GitHub, Groq, ElevenLabs, Ollama, Telegram, Together**.
+- ✅ Caddy TLS termination. `GET /health` endpoint.
+- ✅ `coco` CLI: `env` (shell activation), `token {create|revoke|ls}`.
+- TDX CVM deployment (Phase 1b, next).
 - `GET /attest` returning verified non-debug TDX QuoteV4.
-- Encrypted credential store inside the TEE (sealed by Phala secret
-  injection or by a unsealing key derived inside the enclave).
-- Phantom token registry (name, routes allowlist, expiry, status), persisted encrypted at rest.
-- Constant-time phantom validation, multi-source credential injection
-  (already done in `coco-gateway`).
-- Route profile schema covering every upstream shape an agent hits:
-  `inject_mode` ∈ {`header`, `url_path`, `query_param`, `basic_auth`},
-  prefix-based `inject_overrides` (e.g. Anthropic API key vs Claude Code
-  OAuth token), and per-route `endpoint_rules` (method + path allowlist).
-- Curated route profiles shipped with v1 for the upstreams a solo
-  operator actually uses: **OpenAI, Anthropic, GitHub, Telegram, Slack,
-  Linear, Notion**. Telegram drives the `url_path` case (bot token lives
-  in the URL: `/bot<TOKEN>/<method>`); the rest are header-mode.
-- Per-token policy: routes allowlist, per-route `endpoint_rules` (method + path), hard expiry.
-- Append-only structured audit log, queryable via admin API, optionally
-  streamed to a file or S3.
-- Admin API (`/admin/*`) authenticated by a single admin token printed at
-  deploy.
-- `coco` CLI: `deploy`, `verify`, `creds {add|rotate|rm|ls}`,
-  `token {create|revoke|ls}`, `audit {tail|grep}`.
+- Encrypted credential store inside the TEE (sealed by Phala secret injection or a key derived inside the enclave).
+- Per-token policy: per-route `endpoint_rules` (method + path), hard expiry.
+- Append-only structured audit log, queryable via admin API, optionally streamed to a file or S3.
+- `coco` CLI: `deploy`, `verify`, `creds {add|rotate|rm|ls}`, `audit {tail|grep}`.
 - One-page `DEPLOY.md` and `USING.md`.
 
 ### What is explicitly NOT in v1
@@ -279,34 +270,34 @@ don’t expose a base URL setting.
 
 Anchored on what's actually in the repo today.
 
-**Week 1 — Phase 1b ships.**
+**Phase 1c — done.**
+Named token registry with admin API (`POST/GET/DELETE /admin/tokens`),
+scope enforcement, blake3 hashing at rest. Profile library for 8 services
+(OpenAI, Anthropic, GitHub, Groq, ElevenLabs, Ollama, Telegram, Together).
+Inject modes: header, url_path (Telegram), query_param. Caddy TLS. Local
+`coco` CLI with `env` (shell activation for Claude Code, Codex, gh, Ollama)
+and `token {create|ls|revoke}` subcommands. Backwards-compatible with
+single `COCO_PHANTOM_TOKEN` env var.
+
+**Phase 1b — next.**
 `/attest` returns a verified non-debug TDX QuoteV4. GHCR image published.
 `DEPLOY.md` walks an operator from "I have a Phala account" to a working
 gateway in under 15 minutes. End-to-end demo: Claude Code + phantom token,
 real key never on the laptop.
 
-**Week 2 — Phantom token registry.**
-Replace the single `COCO_PHANTOM_TOKEN` env var with an encrypted registry
-inside the TEE. Add the admin token, the `/admin/tokens` API, and the
-`coco token {create|revoke|ls}` CLI subcommands. Existing single-token
-behavior is preserved as a `--legacy-token` startup flag for one release.
+**Phase 2 — Policy + audit log + non-LLM tool profiles.**
+Per-token route allowlist, per-route `endpoint_rules` (method + path), hard expiry.
+Append-only audit log to an encrypted on-disk volume, plus optional S3 sink.
+`coco audit tail` and `coco audit grep`.
 
-**Week 3 — Policy + audit log + non-LLM tool profiles.**
-Per-token route allowlist, per-route `endpoint_rules` (method + path), hard expiry. Extend the profile schema with
-`inject_mode` (header / url_path / query_param / basic_auth) so the
-gateway can front Telegram (url_path) alongside header-based upstreams.
-Ship the curated GitHub / Telegram / Slack / Linear / Notion profiles.
-Append-only audit log to an encrypted on-disk volume, plus optional S3
-sink. `coco audit tail` and `coco audit grep`.
-
-**Week 4 — Polish.**
+**Phase 3 — Polish.**
 `coco deploy phala` one-shot deploy helper. `coco verify` for attestation.
 `coco creds {add|rotate|rm|ls}` against a sealed credential store.
 `USING.md` with copy-paste recipes for Claude Code, OpenAI Python SDK,
 GitHub CLI, and a Telegram bot. End-to-end test that exercises the full
 flow from a fresh machine.
 
-**Week 4, end:** the v1 promise is true. Ship it.
+**Phase 3, end:** the v1 promise is true. Ship it.
 
 ---
 
