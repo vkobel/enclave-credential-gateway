@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-axum = "0.8"
+axum = { version = "0.8", features = ["macros"] }
 hyper = { version = "1", features = ["http1", "client"] }
 hyper-rustls = { version = "0.27", features = ["http1", "ring", "webpki-tokio"] }
 hyper-util = { version = "0.1", features = ["tokio", "client-legacy"] }
@@ -29,6 +29,10 @@ subtle = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 base64 = "0.22"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+blake3 = "1"
+rand = "0.8"
 
 [features]
 default = []
@@ -36,3 +40,4 @@ integration = []
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }
+tempfile = "3"

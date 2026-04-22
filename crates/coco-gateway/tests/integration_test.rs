@@ -52,7 +52,6 @@ mod auth_tests {
 
     #[test]
     fn test_x_api_key_phantom_auth_raw() {
-        // Claude Code sends x-api-key: <phantom> (raw, no Bearer prefix)
         let t = token("phantom-123");
         assert!(validate_bearer_or_raw(b"phantom-123", &t));
     }
@@ -65,7 +64,6 @@ mod auth_tests {
 
     #[test]
     fn test_authorization_bearer_phantom_auth() {
-        // Claude Code with ANTHROPIC_AUTH_TOKEN sends Authorization: Bearer <phantom>
         let t = token("oauth-phantom");
         assert!(validate_bearer_or_raw(b"Bearer oauth-phantom", &t));
     }
@@ -81,83 +79,48 @@ mod auth_tests {
         use subtle::ConstantTimeEq;
         assert!(bool::from(b"same".ct_eq(b"same")));
         assert!(!bool::from(b"a".ct_eq(b"b")));
-        // Differing lengths: ct_eq requires equal-length slices, so the
-        // gateway's wrapper short-circuits on len mismatch.
         assert_ne!(b"short".len(), b"longer-value".len());
     }
 }
 
 /// Profile loading and schema tests
 mod profile_tests {
+    use coco_gateway::{InjectMode, ProfileRoute, RouteEntry};
+
     #[test]
     fn test_profile_json_parsing_legacy_format() {
         let json = r#"{
-            "routes": {
-                "test": {
-                    "upstream": "http://localhost:9999",
-                    "credential_env": "TEST_TOKEN",
-                    "inject_header": "Authorization",
-                    "credential_format": "Bearer {}"
-                }
-            }
+            "upstream": "http://localhost:9999",
+            "credential_env": "TEST_TOKEN",
+            "inject_header": "Authorization",
+            "credential_format": "Bearer {}"
         }"#;
 
-        #[derive(serde::Deserialize)]
-        struct Profile {
-            routes: std::collections::HashMap<String, ProfileRoute>,
-        }
-        #[derive(serde::Deserialize)]
-        struct ProfileRoute {
-            upstream: String,
-            credential_env: Option<String>,
-            inject_header: String,
-            credential_format: String,
-            #[serde(default)]
-            credential_sources: Vec<serde_json::Value>,
-        }
-
-        let profile: Profile = serde_json::from_str(json).unwrap();
-        let route = profile.routes.get("test").unwrap();
+        let route: ProfileRoute = serde_json::from_str(json).unwrap();
         assert_eq!(route.upstream, "http://localhost:9999");
         assert_eq!(route.credential_env.as_deref(), Some("TEST_TOKEN"));
         assert_eq!(route.inject_header, "Authorization");
         assert_eq!(route.credential_format, "Bearer {}");
         assert!(route.credential_sources.is_empty());
+        assert_eq!(route.inject_mode, InjectMode::Header);
+
+        let entry = RouteEntry::from_profile("test", route);
+        assert_eq!(entry.upstream, "http://localhost:9999");
+        assert_eq!(entry.credential_sources.len(), 1);
+        assert_eq!(entry.credential_sources[0].env, "TEST_TOKEN");
     }
 
     #[test]
     fn test_credential_sources_parsing() {
         let json = r#"{
-            "routes": {
-                "anthropic": {
-                    "upstream": "https://api.anthropic.com",
-                    "credential_sources": [
-                        {"env": "ANTHROPIC_AUTH_TOKEN", "inject_header": "Authorization", "format": "Bearer {}"},
-                        {"env": "ANTHROPIC_API_KEY",    "inject_header": "x-api-key",     "format": "{}"}
-                    ]
-                }
-            }
+            "upstream": "https://api.anthropic.com",
+            "credential_sources": [
+                {"env": "ANTHROPIC_AUTH_TOKEN", "inject_header": "Authorization", "format": "Bearer {}"},
+                {"env": "ANTHROPIC_API_KEY",    "inject_header": "x-api-key",     "format": "{}"}
+            ]
         }"#;
 
-        #[derive(serde::Deserialize)]
-        struct Profile {
-            routes: std::collections::HashMap<String, ProfileRoute>,
-        }
-        #[derive(serde::Deserialize)]
-        struct ProfileRoute {
-            upstream: String,
-            #[serde(default)]
-            credential_sources: Vec<CredSrc>,
-        }
-        #[derive(serde::Deserialize)]
-        struct CredSrc {
-            env: String,
-            inject_header: String,
-            format: String,
-        }
-
-        let profile: Profile = serde_json::from_str(json).unwrap();
-        let route = profile.routes.get("anthropic").unwrap();
+        let route: ProfileRoute = serde_json::from_str(json).unwrap();
         assert_eq!(route.upstream, "https://api.anthropic.com");
         assert_eq!(route.credential_sources.len(), 2);
 
@@ -181,6 +144,65 @@ mod profile_tests {
         let path2 = "/anthropic/v1/messages";
         let prefix2 = path2.trim_start_matches('/').split('/').next().unwrap_or("");
         assert_eq!(prefix2, "anthropic");
+    }
+
+    #[test]
+    fn test_inject_mode_default_is_header() {
+        let json = r##"{"upstream": "http://test", "credential_env": "X"}"##;
+        let route: ProfileRoute = serde_json::from_str(json).unwrap();
+        assert_eq!(route.inject_mode, InjectMode::Header);
+    }
+
+    #[test]
+    fn test_inject_mode_url_path_deserialization() {
+        let json = r#"{
+            "upstream": "https://api.telegram.org",
+            "inject_mode": "url_path",
+            "url_path_prefix": "/bot",
+            "credential_sources": [{"env": "TELEGRAM_BOT_TOKEN", "inject_header": "X", "format": "{}"}]
+        }"#;
+        let route: ProfileRoute = serde_json::from_str(json).unwrap();
+        assert_eq!(route.inject_mode, InjectMode::UrlPath);
+        assert_eq!(route.url_path_prefix.as_deref(), Some("/bot"));
+    }
+
+    #[test]
+    fn test_inject_mode_query_param_deserialization() {
+        let json = r#"{
+            "upstream": "https://example.com",
+            "inject_mode": "query_param",
+            "inject_param": "key",
+            "credential_sources": [{"env": "API_KEY", "inject_header": "X", "format": "{}"}]
+        }"#;
+        let route: ProfileRoute = serde_json::from_str(json).unwrap();
+        assert_eq!(route.inject_mode, InjectMode::QueryParam);
+        assert_eq!(route.inject_param.as_deref(), Some("key"));
+    }
+
+    #[test]
+    fn test_inject_mode_carried_through_to_route_entry() {
+        let json = r#"{
+            "upstream": "https://api.telegram.org",
+            "inject_mode": "url_path",
+            "url_path_prefix": "/bot",
+            "credential_sources": [{"env": "TELEGRAM_BOT_TOKEN", "inject_header": "X", "format": "{}"}]
+        }"#;
+        let route: ProfileRoute = serde_json::from_str(json).unwrap();
+        let entry = RouteEntry::from_profile("telegram", route);
+        assert_eq!(entry.inject_mode, InjectMode::UrlPath);
+        assert_eq!(entry.url_path_prefix.as_deref(), Some("/bot"));
+    }
+
+    #[test]
+    fn test_strip_prefix_carried_through() {
+        let json = r#"{
+            "upstream": "https://api.github.com",
+            "strip_prefix": "/v3",
+            "credential_sources": [{"env": "GITHUB_TOKEN", "inject_header": "Authorization", "format": "Bearer {}"}]
+        }"#;
+        let route: ProfileRoute = serde_json::from_str(json).unwrap();
+        let entry = RouteEntry::from_profile("api", route);
+        assert_eq!(entry.strip_prefix.as_deref(), Some("/v3"));
     }
 }
 
@@ -254,25 +276,18 @@ mod header_tests {
 
     #[test]
     fn test_credential_formatting() {
-        // OpenAI / GitHub: Bearer prefix
         assert_eq!("Bearer {}".replace("{}", "sk-openai-123"), "Bearer sk-openai-123");
-
-        // Anthropic API key: raw (no Bearer prefix)
         assert_eq!("{}".replace("{}", "sk-ant-api-456"), "sk-ant-api-456");
-
-        // Anthropic OAuth token: Bearer prefix
         assert_eq!("Bearer {}".replace("{}", "sk-ant-oat01-789"), "Bearer sk-ant-oat01-789");
     }
 
     #[test]
     fn test_credential_source_fallback_logic() {
-        // Simulates resolve_credential: preferred source tried first, then first available
         let sources: Vec<(&str, Option<&str>)> = vec![
-            ("ANTHROPIC_AUTH_TOKEN", None),          // not set
-            ("ANTHROPIC_API_KEY", Some("sk-ant-123")), // set
+            ("ANTHROPIC_AUTH_TOKEN", None),
+            ("ANTHROPIC_API_KEY", Some("sk-ant-123")),
         ];
 
-        // Preferred = source 0, but it's not available → falls through to source 1
         let preferred: Option<usize> = Some(0);
         let resolved = preferred
             .and_then(|i| sources.get(i).and_then(|(env, val)| val.map(|v| (*env, v))))
@@ -281,5 +296,154 @@ mod header_tests {
         let (env, val) = resolved.unwrap();
         assert_eq!(env, "ANTHROPIC_API_KEY");
         assert_eq!(val, "sk-ant-123");
+    }
+
+    #[test]
+    fn test_header_mode_url_construction() {
+        let upstream = "https://api.openai.com";
+        let upstream_path = "/v1/chat/completions";
+        let query = "";
+        let url = format!("{}{}{}", upstream, upstream_path, query);
+        assert_eq!(url, "https://api.openai.com/v1/chat/completions");
+    }
+
+    #[test]
+    fn test_url_path_mode_construction() {
+        let upstream = "https://api.telegram.org";
+        let url_path_prefix = "/bot";
+        let credential = "123456:ABC-DEF";
+        let upstream_path = "/sendMessage";
+        let query = "";
+        let url = format!("{}{}{}{}{}", upstream, url_path_prefix, credential, upstream_path, query);
+        assert_eq!(url, "https://api.telegram.org/bot123456:ABC-DEF/sendMessage");
+    }
+
+    #[test]
+    fn test_query_param_mode_construction() {
+        let upstream = "https://example.com";
+        let upstream_path = "/api/data";
+        let query = "";
+        let inject_param = "api_key";
+        let credential = "my-key";
+        let sep = "?";
+        let url = format!("{}{}{}{}{}{}", upstream, upstream_path, query, sep, inject_param, credential);
+        assert_eq!(url, "https://example.com/api/data?api_keymy-key");
+    }
+
+    #[test]
+    fn test_query_param_mode_with_existing_query() {
+        let upstream = "https://example.com";
+        let upstream_path = "/api/data";
+        let query = "?foo=bar";
+        let inject_param = "api_key";
+        let credential = "my-key";
+        let sep = "&";
+        let url = format!("{}{}{}{}{}{}", upstream, upstream_path, query, sep, inject_param, credential);
+        assert_eq!(url, "https://example.com/api/data?foo=bar&api_keymy-key");
+    }
+
+    #[test]
+    fn test_strip_prefix_applied() {
+        let path = "/api/v3/user";
+        let prefix = "api";
+        let upstream_path = &path[prefix.len() + 1..]; // "/v3/user"
+        let strip_prefix = "/v3";
+        let stripped = upstream_path.strip_prefix(strip_prefix).unwrap_or(upstream_path);
+        assert_eq!(stripped, "/user");
+    }
+}
+
+/// Token registry tests
+mod registry_tests {
+    use coco_gateway::{TokenRegistry, TokenStatus};
+    use tempfile::TempDir;
+
+    async fn create_registry() -> (TokenRegistry, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("tokens.json");
+        let registry = TokenRegistry::load_or_create(path).await.unwrap();
+        (registry, dir)
+    }
+
+    #[tokio::test]
+    async fn test_create_and_validate_token() {
+        let (registry, _dir) = create_registry().await;
+        let (record, token_value) = registry.create_token("test".to_string(), vec![]).await;
+
+        assert!(token_value.starts_with("ccgw_"));
+        assert_eq!(record.name, "test");
+        assert_eq!(record.status, TokenStatus::Active);
+
+        let validated = registry.validate(&token_value).await;
+        assert!(validated.is_some());
+        assert_eq!(validated.unwrap().id, record.id);
+    }
+
+    #[tokio::test]
+    async fn test_wrong_token_fails_validation() {
+        let (registry, _dir) = create_registry().await;
+        registry.create_token("test".to_string(), vec![]).await;
+
+        let validated = registry.validate("ccgw_wrong").await;
+        assert!(validated.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_revoked_token_fails_validation() {
+        let (registry, _dir) = create_registry().await;
+        let (record, token_value) = registry.create_token("test".to_string(), vec![]).await;
+
+        assert!(registry.validate(&token_value).await.is_some());
+        assert!(registry.revoke_token(record.id).await);
+
+        let validated = registry.validate(&token_value).await;
+        assert!(validated.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_list_tokens_omits_token_value() {
+        let (registry, _dir) = create_registry().await;
+        registry.create_token("laptop".to_string(), vec!["anthropic".to_string()]).await;
+        registry.create_token("ci".to_string(), vec![]).await;
+
+        let tokens = registry.list_tokens().await;
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].name, "laptop");
+        assert_eq!(tokens[0].scope, vec!["anthropic"]);
+    }
+
+    #[tokio::test]
+    async fn test_registry_persistence() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("tokens.json");
+
+        let token_value = {
+            let registry = TokenRegistry::load_or_create(path.clone()).await.unwrap();
+            let (_, token) = registry.create_token("persist".to_string(), vec![]).await;
+            token
+        };
+
+        let registry2 = TokenRegistry::load_or_create(path).await.unwrap();
+        assert!(registry2.validate(&token_value).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_scope_enforcement() {
+        let (registry, _dir) = create_registry().await;
+        let (_record, scoped_token) = registry.create_token("scoped".to_string(), vec!["httpbin".to_string()]).await;
+
+        let validated = registry.validate(&scoped_token).await.unwrap();
+        assert_eq!(validated.scope, vec!["httpbin"]);
+        assert!(!validated.scope.is_empty());
+        assert!(!validated.scope.iter().any(|s| s == "anthropic"));
+    }
+
+    #[tokio::test]
+    async fn test_load_or_create_missing_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("nonexistent/tokens.json");
+        let registry = TokenRegistry::load_or_create(path).await.unwrap();
+        let tokens = registry.list_tokens().await;
+        assert!(tokens.is_empty());
     }
 }

@@ -1,5 +1,19 @@
 //! Shared logic for coco-gateway — exported for integration tests.
 
+pub mod admin;
+pub mod auth;
+pub mod health;
+pub mod profile;
+pub mod proxy;
+pub mod registry;
+pub mod state;
+
+// Re-exports for convenience
+pub use auth::PhantomAuth;
+pub use profile::{CredentialSource, InjectMode, ProfileRoute, RouteEntry};
+pub use registry::{TokenRecord, TokenRegistry, TokenStatus};
+pub use state::{AppState, HttpsClient};
+
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
