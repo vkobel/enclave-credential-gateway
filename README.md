@@ -8,57 +8,63 @@ Remotely deployable with automatic TLS (Caddy). Hardware-attested deployment on 
 
 ## Quickstart — Local dev
 
-**1. Set your credentials and start the gateway:**
+**1. Build the CLI:**
+
+```bash
+cargo build --release -p coco-cli
+cp target/release/coco /usr/local/bin/
+```
+
+**2. Set credentials and start the gateway:**
 
 ```bash
 export COCO_ADMIN_TOKEN=$(openssl rand -hex 32)   # admin API secret — save this
-export ANTHROPIC_API_KEY=sk-ant-...
-export OPENAI_API_KEY=sk-...
 export GITHUB_TOKEN=ghp_...
-export HTTPBIN_TOKEN=any-value                     # smoke test only
+export HTTPBIN_TOKEN=any-value                     # any string; httpbin echoes it back
 
 docker compose up -d --build
 ```
 
-`COCO_ADMIN_TOKEN` is required. The gateway refuses to start without it.
+`COCO_ADMIN_TOKEN` is required. The gateway refuses to start without it. Credentials you don't set are simply not proxied — the gateway returns `503` for those routes.
 
-**2. Mint a phantom token for your agent:**
-
-```bash
-curl -s -X POST http://localhost:8080/admin/tokens \
-  -H "Authorization: Bearer $COCO_ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"laptop","scope":["anthropic","openai","api"]}' | jq .
-# { "id": "...", "name": "laptop", "token": "ccgw_...", "scope": [...], ... }
-```
-
-The `token` field is shown **once**. Save it. `scope` is optional — omit it to allow all routes.
-
-**3. Write the coco CLI config:**
+**3. Write the CLI config:**
 
 ```toml
 # ~/.config/coco/config.toml
 gateway_url = "http://localhost:8080"
-admin_token = "<COCO_ADMIN_TOKEN>"
+admin_token = "<your COCO_ADMIN_TOKEN>"
+```
 
+**4. Mint a phantom token:**
+
+Scope values are the route keys defined in the profile. The `github` route has an `alias: "api"` baked in so that `gh` CLI requests (which hit `/api/v3/...` via `GH_HOST`) are transparently routed there.
+
+```bash
+coco token create --name laptop --scope github,httpbin
+# id:         ...
+# token:      ccgw_...    ← shown once; save it
+```
+
+Add the token to your config:
+
+```toml
+# ~/.config/coco/config.toml
 [tokens]
 laptop = "ccgw_..."
 ```
 
-**4. Activate your shell:**
+**5. Activate and verify:**
 
 ```bash
-eval $(coco env laptop)            # sets ANTHROPIC_BASE_URL, OPENAI_BASE_URL, GH_HOST, OLLAMA_HOST
-eval $(coco env laptop --codex)    # also writes ~/.codex/config.toml for Codex CLI
-```
+eval $(coco env laptop)    # sets GH_HOST, GH_TOKEN, ANTHROPIC_BASE_URL, OPENAI_BASE_URL, ...
 
-**5. Run agents — no real keys on the local machine:**
+# Smoke test — any phantom token, no real upstream credential needed
+curl http://localhost:8080/httpbin/bearer \
+  -H "Proxy-Authorization: Bearer $GH_TOKEN"
+# {"authenticated": true, "token": "any-value"}
 
-```bash
-claude                      # Claude Code → gateway → Anthropic
-codex                       # Codex CLI   → gateway → OpenAI
-gh repo list                # gh CLI      → gateway → GitHub
-ollama run llama3.2         # Ollama      → gateway → your Ollama server
+# GitHub — uses real GITHUB_TOKEN injected on the gateway side
+gh repo list
 ```
 
 ---

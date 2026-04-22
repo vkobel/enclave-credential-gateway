@@ -55,6 +55,10 @@ pub struct ProfileRoute {
     pub url_path_prefix: Option<String>,
     #[serde(default)]
     pub inject_param: Option<String>,
+    /// Alternate path prefix that also routes here (e.g. "api" for the github route,
+    /// since `gh` CLI sends /api/v3/... when GH_HOST is set).
+    #[serde(default)]
+    pub alias: Option<String>,
 }
 
 pub struct RouteEntry {
@@ -64,6 +68,7 @@ pub struct RouteEntry {
     pub inject_mode: InjectMode,
     pub url_path_prefix: Option<String>,
     pub inject_param: Option<String>,
+    pub alias: Option<String>,
 }
 
 impl RouteEntry {
@@ -93,6 +98,7 @@ impl RouteEntry {
             inject_mode: route.inject_mode,
             url_path_prefix: route.url_path_prefix,
             inject_param: route.inject_param,
+            alias: route.alias,
         }
     }
 }
@@ -150,6 +156,7 @@ fn builtin_routes() -> Vec<(String, RouteEntry)> {
                 inject_mode: InjectMode::Header,
                 url_path_prefix: None,
                 inject_param: None,
+                alias: None,
             },
         ),
         (
@@ -174,6 +181,7 @@ fn builtin_routes() -> Vec<(String, RouteEntry)> {
                 inject_mode: InjectMode::Header,
                 url_path_prefix: None,
                 inject_param: None,
+                alias: None,
             },
         ),
         (
@@ -186,10 +194,11 @@ fn builtin_routes() -> Vec<(String, RouteEntry)> {
                     format: "Bearer {}".to_string(),
                     prefix: None,
                 }],
-                strip_prefix: None,
+                strip_prefix: Some("/api/v3".to_string()),
                 inject_mode: InjectMode::Header,
                 url_path_prefix: None,
                 inject_param: None,
+                alias: Some("api".to_string()),
             },
         ),
         (
@@ -206,6 +215,7 @@ fn builtin_routes() -> Vec<(String, RouteEntry)> {
                 inject_mode: InjectMode::Header,
                 url_path_prefix: None,
                 inject_param: None,
+                alias: None,
             },
         ),
     ]

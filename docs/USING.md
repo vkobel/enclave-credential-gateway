@@ -10,32 +10,42 @@ This guide assumes you have a running gateway (local or remote). If not, see the
 
 ```bash
 cargo build --release -p coco-cli
-cp target/release/coco /usr/local/bin/coco
+cp target/release/coco /usr/local/bin/
 ```
 
-**2. Create a token** (or use an existing one):
-
-```bash
-# Via coco CLI (requires admin_token in config)
-coco token create --name laptop --scope anthropic,openai,api,ollama
-
-# Or directly via curl
-curl -s -X POST https://gw.example.com/admin/tokens \
-  -H "Authorization: Bearer $COCO_ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"laptop","scope":["anthropic","openai","api","ollama"]}' | jq -r .token
-```
-
-**3. Write the config file:**
+**2. Write the config file:**
 
 ```toml
 # ~/.config/coco/config.toml
 gateway_url = "https://gw.example.com"
 admin_token = "..."   # only needed for token management commands
+```
 
+**3. Create a token:**
+
+Scope values are route prefixes from your profile. Omit `--scope` to allow all routes.
+
+```bash
+# Via coco CLI (requires admin_token in config)
+coco token create --name laptop --scope github,httpbin,anthropic,openai,ollama
+# token: ccgw_... ← shown once; add it to config
+
+# Or directly via curl
+curl -s -X POST https://gw.example.com/admin/tokens \
+  -H "Authorization: Bearer $COCO_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"laptop","scope":["github","httpbin","anthropic","openai","ollama"]}' | jq -r .token
+```
+
+**4. Add the token to config:**
+
+```toml
+# ~/.config/coco/config.toml
 [tokens]
 laptop = "ccgw_..."
 ```
+
+> Route key reference: `github`, `anthropic`, `openai`, `httpbin`, `ollama`, `telegram`. The `github` route also accepts `gh` CLI requests — `gh` appends `/api/v3/` to `GH_HOST`, and the route has a built-in alias that maps that prefix transparently.
 
 ---
 
@@ -133,7 +143,7 @@ export GH_TOKEN=ccgw_...
 gh repo list
 ```
 
-`GH_HOST` tells `gh` to route all API requests through the gateway instead of directly to `api.github.com`. The gateway's `api` route strips the `/v3` path prefix that `gh` appends, then forwards to `api.github.com` with the real `GITHUB_TOKEN`.
+`GH_HOST` tells `gh` to route all API requests through the gateway instead of directly to `api.github.com`. `gh` appends `/api/v3/` to any custom host; the `github` route has a built-in alias for that prefix and strips it before forwarding to `api.github.com` with the real `GITHUB_TOKEN`.
 
 > **Note:** `GH_HOST` is a hostname, not a full URL. `coco env` sets it correctly.
 
@@ -193,15 +203,15 @@ app = (
 curl https://gw.example.com/health
 # {"status":"ok"}
 
-# Confirm a phantom token is accepted
+# Smoke test — no real upstream credential needed; httpbin echoes the token back
 curl https://gw.example.com/httpbin/bearer \
   -H "Proxy-Authorization: Bearer ccgw_..."
-# {"authenticated": true, ...}
+# {"authenticated": true, "token": "any-value"}
 
 # Test scope enforcement: request a route not in the token's scope
 curl https://gw.example.com/openai/v1/models \
-  -H "Authorization: Bearer ccgw_telegram-only-token"
-# 403 Forbidden
+  -H "Authorization: Bearer ccgw_..."
+# 403 Forbidden — token scope doesn't include "openai"
 ```
 
 ---

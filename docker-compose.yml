@@ -4,7 +4,7 @@ services:
     expose:
       - "8080"
     environment:
-      - COCO_PHANTOM_TOKEN=${COCO_PHANTOM_TOKEN}
+      - COCO_PHANTOM_TOKEN
       - COCO_ADMIN_TOKEN=${COCO_ADMIN_TOKEN}
       - COCO_TOKENS_FILE=/data/tokens.json
       - OPENAI_API_KEY=${OPENAI_API_KEY}

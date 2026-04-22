@@ -2,6 +2,6 @@
 	email admin@example.com
 }
 
-{$COCO_DOMAIN} {
+{$COCO_DOMAIN:localhost} {
 	reverse_proxy coco-gateway:8080
 }

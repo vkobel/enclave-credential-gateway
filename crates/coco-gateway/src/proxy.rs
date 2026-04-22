@@ -19,8 +19,9 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
 
     let stripped = path.trim_start_matches('/');
     let prefix = stripped.split('/').next().unwrap_or("");
+    let canonical = state.resolve_route_key(prefix);
 
-    let (_, entry) = match state.routes.iter().find(|(p, _)| p == prefix) {
+    let (_, entry) = match state.routes.iter().find(|(p, _)| p == canonical) {
         Some(r) => r,
         None => return (StatusCode::NOT_FOUND, "404 Not Found").into_response(),
     };

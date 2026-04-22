@@ -15,10 +15,11 @@
         {"env": "OPENAI_API_KEY", "inject_header": "Authorization", "format": "Bearer {}"}
       ]
     },
-    "api": {
+    "github": {
       "upstream": "https://api.github.com",
       "inject_mode": "header",
-      "strip_prefix": "/v3",
+      "alias": "api",
+      "strip_prefix": "/api/v3",
       "credential_sources": [
         {"env": "GITHUB_TOKEN", "inject_header": "Authorization", "format": "Bearer {}"}
       ]

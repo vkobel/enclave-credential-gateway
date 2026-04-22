@@ -90,6 +90,11 @@ async fn main() {
         None => info!("No profile found, using built-in defaults ({} routes)", routes.len()),
     }
 
+    let route_aliases: std::collections::HashMap<String, String> = routes
+        .iter()
+        .filter_map(|(key, entry)| entry.alias.as_ref().map(|a| (a.clone(), key.clone())))
+        .collect();
+
     let https_connector = HttpsConnectorBuilder::new()
         .with_webpki_roots()
         .https_only()
@@ -103,6 +108,7 @@ async fn main() {
         token_registry,
         admin_token,
         routes,
+        route_aliases,
         https_client,
     });
 

@@ -102,10 +102,11 @@ pub async fn auth_middleware(
 ) -> Response {
     let path = req.uri().path();
     let prefix = path.trim_start_matches('/').split('/').next().unwrap_or("");
+    let canonical = state.resolve_route_key(prefix);
     let sources: &[CredentialSource] = state
         .routes
         .iter()
-        .find(|(p, _)| p == prefix)
+        .find(|(p, _)| p == canonical)
         .map(|(_, entry)| entry.credential_sources.as_slice())
         .unwrap_or(&[]);
 
@@ -114,7 +115,7 @@ pub async fn auth_middleware(
         let candidates = extract_candidate_tokens(&req);
         for candidate in candidates {
             if let Some(record) = registry.validate(&candidate).await {
-                if !record.scope.is_empty() && !record.scope.iter().any(|s| s == prefix) {
+                if !record.scope.is_empty() && !record.scope.iter().any(|s| s == canonical) {
                     return (StatusCode::FORBIDDEN, "403 Forbidden — token scope denied").into_response();
                 }
                 let auth = PhantomAuth {
