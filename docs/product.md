@@ -20,7 +20,7 @@ The core insight: **credentials are infrastructure, not agent state.**
 
 ### Why not a local proxy?
 
-Local proxies (OneCLI, AgentSecrets, nono's proxy mode) are a meaningful
+Local proxies (OneCLI, AgentSecrets) are a meaningful
 security step up from `.env` files. They protect credentials from the agent
 process. CoCo protects credentials from *everyone* — including the
 infrastructure operator. And unlike any local proxy, CoCo is a single
@@ -152,9 +152,9 @@ minutes**, end to end:
    readable inside the TEE.
 4. **Mint phantoms per client.**
    ```
-   coco token create --name laptop-claude-code --routes anthropic,github         --budget 100k-tokens/day
+   coco token create --name laptop-claude-code --routes anthropic,github
    coco token create --name ci-runner          --routes openai,anthropic,github  --expires 30d
-   coco token create --name phone-shortcut     --routes telegram                 --budget 1k-requests/day
+   coco token create --name phone-shortcut     --routes telegram
    ```
 5. **Use them.** Each agent points at the gateway URL with its phantom in
    place of the real key. Existing SDKs work with no code changes (the
@@ -170,8 +170,7 @@ minutes**, end to end:
 - `GET /attest` returning verified non-debug TDX QuoteV4.
 - Encrypted credential store inside the TEE (sealed by Phala secret
   injection or by a unsealing key derived inside the enclave).
-- Phantom token registry (name, routes allowlist, budget caps, expiry,
-  status), persisted encrypted at rest.
+- Phantom token registry (name, routes allowlist, expiry, status), persisted encrypted at rest.
 - Constant-time phantom validation, multi-source credential injection
   (already done in `coco-gateway`).
 - Route profile schema covering every upstream shape an agent hits:
@@ -182,9 +181,7 @@ minutes**, end to end:
   operator actually uses: **OpenAI, Anthropic, GitHub, Telegram, Slack,
   Linear, Notion**. Telegram drives the `url_path` case (bot token lives
   in the URL: `/bot<TOKEN>/<method>`); the rest are header-mode.
-- Per-token policy: routes allowlist, per-route `endpoint_rules`
-  (method + path), daily request count cap, daily approximate-token-count
-  cap for LLM routes, hard expiry.
+- Per-token policy: routes allowlist, per-route `endpoint_rules` (method + path), hard expiry.
 - Append-only structured audit log, queryable via admin API, optionally
   streamed to a file or S3.
 - Admin API (`/admin/*`) authenticated by a single admin token printed at
@@ -295,9 +292,7 @@ inside the TEE. Add the admin token, the `/admin/tokens` API, and the
 behavior is preserved as a `--legacy-token` startup flag for one release.
 
 **Week 3 — Policy + audit log + non-LLM tool profiles.**
-Per-token route allowlist, per-route `endpoint_rules` (method + path),
-daily request cap, daily token-count cap (for LLM routes; approximate
-from request/response sizes). Extend the profile schema with
+Per-token route allowlist, per-route `endpoint_rules` (method + path), hard expiry. Extend the profile schema with
 `inject_mode` (header / url_path / query_param / basic_auth) so the
 gateway can front Telegram (url_path) alongside header-based upstreams.
 Ship the curated GitHub / Telegram / Slack / Linear / Notion profiles.
@@ -359,32 +354,6 @@ the references for v3.
 
 ---
 
-## Relationship to Nono
-
-CoCo's route-profile JSON schema is lifted from [`nono`][nono]'s
-`custom_credentials` shape: `upstream`, `credential_key`, `inject_mode`,
-`inject_header`, `credential_format`, `inject_overrides`, `endpoint_rules`.
-Nono proved that shape covers the upstreams real agents hit (LLMs,
-GitHub, Telegram, Slack, …), so v1 reuses it rather than reinventing it.
-
-What v1 takes from Nono: **the JSON schema**, as a vendored format.
-
-What v1 does **not** take: the `nono` Rust crate as a runtime dependency.
-Nono's library is a client-side sandbox primitive (Landlock on Linux,
-Seatbelt on macOS) bundled with filesystem rules, hooks, keystore
-integration, and rollback — none of which apply inside a TDX gateway.
-Pulling the crate in would drag along OS-specific enforcement code for a
-schema we can parse in ~100 lines.
-
-Practically: the `nono/` submodule stays as reference, `coco-gateway`
-owns its own parser, and the two schemas are kept schema-compatible on
-the fields they share. Profiles authored for nono's reverse-proxy mode
-should load in CoCo with minimal edits, and vice versa.
-
-[nono]: https://github.com/always-further/nono
-
----
-
 ## Open problems we are not pretending to have solved
 
 - **First-time credential entry UX.** Today the operator pastes real keys
@@ -405,7 +374,7 @@ should load in CoCo with minimal edits, and vice versa.
 - **Not a Vault replacement** for non-agent workloads. CoCo is specifically
   for “agent → external API” HTTP traffic.
 - **Not a silver bullet for prompt injection.** Holding the credential
-  outside the agent limits blast radius; policy and budgets contain a
+  outside the agent limits blast radius; route scoping contains a
   misbehaving agent. Nothing here makes the agent itself trustworthy.
 - **Not a parallel identity system.** v3 will mint phantoms from existing
   corporate identity, not invent a new one.

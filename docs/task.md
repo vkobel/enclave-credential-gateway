@@ -1,8 +1,17 @@
-# CoCo Credential Gateway — v1 Task List
+# CoCo Credential Gateway — Tasks
 
-> Updated: April 2026 — refined after competitive review (OneCLI, AgentSecrets, Aembit).
-> Current state: Phase 1a complete (plain proxy). Phase 1b (CVM attestation) is in-flight.
-> Goal: achieve the v1 promise — deploy once, mint phantoms, audit, revoke.
+## Progress
+
+| Phase | Description | Status |
+|---|---|---|
+| 1a | Plain proxy — phantom token auth, profile routing, multi-source credential injection | **done** |
+| 1c | Remote deploy, profile library, lightweight token registry, local `coco` CLI | **next** |
+| 1b | CVM attestation — `GET /attest`, TDX QuoteV4, Phala deploy | not started |
+| 2 | Full token registry — encrypted store, admin API, policy | not started |
+| 3 | Per-token policy + audit log | not started |
+| 4 | Sealed credential store + full CLI + polish | not started |
+
+---
 
 ## Standards anchor
 
@@ -10,10 +19,6 @@ CoCo implements a TEE-backed RFC 8693 Security Token Service.
 - The phantom token is the `subject_token` (who is acting).
 - The TEE is the STS (the authority that decides what rights to grant).
 - The injected upstream credential — or in post-v1, a short-lived derived JWT — is the output `access_token`.
-- The `upstream_scope` field on a credential record is the RFC 8693 `resource`/`audience` constraint.
-- Post-v1: phantom token records carry a `may_act` whitelist of which tokens may trigger an exchange for a given credential.
-
-This is not over-engineering for v1. It is vocabulary. Using it in DEPLOY.md and product.md costs nothing and positions CoCo correctly against both classical KMS and proxy-only tools.
 
 ---
 
@@ -24,10 +29,8 @@ CoCo protects credentials from everyone — including the infrastructure operato
 while producing a cryptographically verifiable audit trail.
 
 A classical KMS answers: "here is your secret, go use it."
-An HSM answers: "give me data, I'll sign it, here's the signature."
 CoCo answers: "give me the request, I'll authenticate and execute it inside a hardware boundary, here's the response."
 The credential participates in the live request but is never transmitted to the requester.
-This is the model. Keep it sharp.
 
 ---
 
@@ -55,7 +58,6 @@ coco token create --name claude-code [--scope api.openai.com] [--expires 30d]
 ```
 coco token create --name github-actions \
   --scope api.openai.com/v1/embeddings \
-  --budget-requests 500 \
   --expires 30d
 # → ccgw_ab12…
 
@@ -107,7 +109,7 @@ coco verify https://gw.example
 coco deploy phala
 coco verify <url>
 
-coco token create --name <str> [--scope <host/path>] [--budget-requests <n>] [--budget-tokens <n>] [--expires <Nd>]
+coco token create --name <str> [--scope <host/path>] [--expires <Nd>]
 coco token ls [--json]
 coco token revoke <name|id>
 
@@ -127,9 +129,113 @@ The `coco` binary never touches credential values after `cred add` — it sends 
 
 ---
 
-## Phase 1b — CVM Attestation (prerequisite for everything below)
+## Phase 1c — Remote Deploy + Profile Library + Token Registry + Local CLI ← next
 
-Status: tasks defined in `openspec/changes/poc-v1b-cvm-attestation/tasks.md`. Complete these first.
+Goal: a remotely deployable gateway that any agent or tool can connect to, with a curated set of named service profiles, per-client named tokens, and a local `coco` helper that sets up your shell in one command.
+
+### 1c-A. Remote deploy infrastructure
+
+- [ ] 1c.1 — Add `GET /health` unauthenticated endpoint returning `200 OK {"status":"ok"}`.
+- [ ] 1c.2 — Add `strip_prefix` field to route config (optional string). When set, strip that prefix from the incoming path before forwarding. Needed for `GH_HOST` support: GitHub Enterprise clients route to `/api/v3/...`; stripping `/api/v3` before forwarding to `api.github.com` makes it transparent.
+- [ ] 1c.3 — Add Caddy service to `docker-compose.yml` for automatic TLS termination (Let's Encrypt). Caddy proxies `443 → 8080`. Gateway itself stays HTTP-only behind it.
+
+### 1c-B. Named service profile library
+
+Replace the single `examples/profile.json` with a `profiles/` directory of named per-service files. The deploy-time `profile.json` merges whichever services you want.
+
+- [ ] 1c.4 — Define the extended route schema fields needed by new profiles:
+  - `strip_prefix: Option<String>` — path prefix to strip before forwarding (existing 1c.2)
+  - `inject_mode: "header" | "url_path" | "query_param"` — where to inject the credential (default: `"header"`)  
+    - `url_path`: replaces a `{credential}` placeholder in the upstream path template (needed for Telegram: `/bot{credential}/...`)
+    - `query_param`: appends credential as a query parameter with a configured key name
+  - `inject_param: Option<String>` — query param name when `inject_mode = "query_param"`
+- [ ] 1c.5 — Ship the following named profiles in `profiles/`:
+
+  | File | Upstream | inject_mode | Notes |
+  |---|---|---|---|
+  | `anthropic.json` | api.anthropic.com | header | x-api-key or Bearer (existing multi-source) |
+  | `openai.json` | api.openai.com | header | Authorization: Bearer |
+  | `github.json` | api.github.com | header | Authorization: Bearer + strip_prefix /api/v3 |
+  | `groq.json` | api.groq.com | header | OpenAI-compatible, Authorization: Bearer |
+  | `elevenlabs.json` | api.elevenlabs.io | header | xi-api-key header |
+  | `ollama.json` | configurable upstream | header | Authorization: Bearer; OLLAMA_HOST=https://gw.example.com/ollama |
+  | `telegram.json` | api.telegram.org | url_path | /bot{credential}/... |
+  | `together.json` | api.together.xyz | header | Authorization: Bearer (OpenAI-compat) |
+
+- [ ] 1c.6 — Update `examples/profile.json` to demonstrate profile composition (include anthropic + openai + github + groq as a starter set).
+- [ ] 1c.7 — Add profile validation at startup: log a warning (not a fatal error) for any route with `inject_mode = url_path` that has no `{credential}` placeholder in its upstream URL.
+
+### 1c-C. Lightweight token registry
+
+Replaces the single `COCO_PHANTOM_TOKEN` env var with a named multi-token registry. No encryption yet (that comes with TEE in 1b/2). Tokens are stored in a JSON file, hashed at rest.
+
+- [ ] 1c.8 — Define `TokenRecord`: `id` (UUID), `name` (string), `scope` (optional list of route prefixes this token is allowed to call), `created_at`, `status: Active|Revoked`.
+- [ ] 1c.9 — Implement `TokenRegistry`: load from `/data/tokens.json` at startup; persist on every mutation. Hash tokens with `blake3` (fast, not a password hash — the token itself is 256-bit random so brute force is not a concern). Fail-safe to empty registry on missing/corrupt file.
+- [ ] 1c.10 — Admin API, protected by `COCO_ADMIN_TOKEN` env var (set at deploy time, validated constant-time):
+  - `POST /admin/tokens` — body `{"name": str, "scope": [str]?}` → generates a 32-byte hex token, stores hashed, returns `{"id": uuid, "name": str, "token": "ccgw_<hex>"}` (token shown once)
+  - `GET /admin/tokens` — list all records (name, id, scope, status, created_at — never the token value)
+  - `DELETE /admin/tokens/:id` — revoke (sets status to Revoked, persists)
+- [ ] 1c.11 — Update auth middleware to validate against the token registry (constant-time hash comparison). Attach matched `TokenRecord` to request extensions so scope can be checked by the proxy handler.
+- [ ] 1c.12 — Enforce scope: if `TokenRecord.scope` is non-empty and the request's route prefix is not in it, return `403 Forbidden`. Evaluate before credential resolution.
+- [ ] 1c.13 — Keep `COCO_PHANTOM_TOKEN` as a legacy fallback: if set and the registry lookup fails, fall back to the single-token check (backwards compat for existing deployments).
+- [ ] 1c.14 — Unit tests: token creation round-trip, revoked token rejected, scope enforcement, legacy fallback.
+
+### 1c-D. Local `coco` CLI
+
+A single Rust binary (`crates/coco-cli`) with minimal subcommands. Goal: one command activates the right env vars (and tool-specific config files) for the current shell session.
+
+- [ ] 1c.15 — Scaffold `crates/coco-cli` with clap. Config file at `~/.config/coco/config.toml`:
+  ```toml
+  gateway_url = "https://gw.example.com"
+  admin_token = "ccgw_admin_..."  # optional, only needed for token management
+
+  [tokens]
+  claude-code  = "ccgw_3a9f..."
+  ci-runner    = "ccgw_ab12..."
+  ```
+- [ ] 1c.16 — `coco env <token-name>` — prints `export` statements for every tool that the gateway supports, using the named token as the phantom. Output is eval'd in the shell: `eval $(coco env claude-code)`. Emits:
+  ```bash
+  export ANTHROPIC_BASE_URL=https://gw.example.com/anthropic
+  export ANTHROPIC_API_KEY=ccgw_3a9f...
+  export OPENAI_BASE_URL=https://gw.example.com/openai
+  export OPENAI_API_KEY=ccgw_3a9f...
+  export GH_HOST=gw.example.com
+  export GH_TOKEN=ccgw_3a9f...
+  export OLLAMA_HOST=https://gw.example.com/ollama
+  ```
+- [ ] 1c.17 — `coco env <token-name> --codex` — additionally writes `~/.codex/config.toml` with `openai_base_url` set (Codex CLI does not read `OPENAI_BASE_URL` from env; requires its own config file).
+- [ ] 1c.18 — `coco token create --name <str> [--scope <csv>]` — calls `POST /admin/tokens`, prints the token value once.
+- [ ] 1c.19 — `coco token ls` — calls `GET /admin/tokens`, pretty-prints table.
+- [ ] 1c.20 — `coco token revoke <name|id>` — calls `DELETE /admin/tokens/:id`.
+- [ ] 1c.21 — Write `docs/USING.md`: copy-paste setup for Claude Code, Codex, gh CLI, and Ollama on a remote gateway. Shows both `eval $(coco env ...)` flow and manual env var approach.
+
+---
+
+**Usage after 1c:**
+```bash
+# Remote host:
+# env: COCO_ADMIN_TOKEN=<secret>, ANTHROPIC_API_KEY=sk-ant-..., GITHUB_TOKEN=ghp_..., etc.
+docker compose up -d   # Caddy handles TLS
+
+# Create a named token for your laptop:
+coco token create --name laptop --scope anthropic,openai,github,ollama
+# → ccgw_3a9f…  (save to ~/.config/coco/config.toml)
+
+# Activate in your shell (Claude Code + Codex + gh + Ollama all configured):
+eval $(coco env laptop --codex)
+
+# Everything works:
+claude                    # Claude Code → gateway → Anthropic
+codex                     # Codex CLI   → gateway → OpenAI
+gh repo list              # gh CLI      → gateway → GitHub
+ollama run llama3.2       # Ollama      → gateway → your Ollama server
+```
+
+---
+
+## Phase 1b — CVM Attestation
+
+Status: not started. Can be done in parallel with or after 1c.
 
 - [ ] 1b.1 — Add `reqwest` dependency and implement `GET /attest` handler (tappd → TDX QuoteV4, hex-encode, JSON response)
 - [ ] 1b.2 — Parse `td_attributes` bit 0; log `ERROR: TDX debug mode detected` and set `"debug": true` on mismatch
@@ -147,26 +253,25 @@ Replaces the single `COCO_PHANTOM_TOKEN` env var with a named, per-client token 
 
 ### 2a. Encrypted registry storage
 
-- [ ] 2a.1 — Define `TokenRecord` struct: `id` (UUID), `name` (human label for audit log and CLI), `routes_allowlist` (`Vec<String>`), `budget_daily_requests: Option<u32>`, `budget_daily_tokens: Option<u64>`, `expires_at: Option<DateTime<Utc>>`, `status: Active|Revoked`, `created_at`
-  - Note: `name` is a first-class field, not an alias. Audit log entries must use it ("claude-code called openai" not "token-3a9f called openai").
-- [ ] 2a.2 — Implement `TokenRegistry`: in-memory store backed by an encrypted-at-rest JSON file (`/data/tokens.enc`). Use AES-256-GCM with a key derived inside the enclave (from Phala's injected entropy or a sealed random key generated at first boot)
+- [ ] 2a.1 — Define `TokenRecord` struct: `id` (UUID), `name` (human label for audit log and CLI), `routes_allowlist` (`Vec<String>`), `expires_at: Option<DateTime<Utc>>`, `status: Active|Revoked`, `created_at`
+- [ ] 2a.2 — Implement `TokenRegistry`: in-memory store backed by an encrypted-at-rest JSON file (`/data/tokens.enc`). Use AES-256-GCM with a key derived inside the enclave
 - [ ] 2a.3 — Persist registry on every mutating operation (add, revoke); load at startup; fail-safe to empty registry on corrupt/missing file
-- [ ] 2a.4 — Add `--legacy-token` startup flag: when set, single `COCO_PHANTOM_TOKEN` env var works as before (one-release migration path for existing deployments)
+- [ ] 2a.4 — Add `--legacy-token` startup flag: when set, single `COCO_PHANTOM_TOKEN` env var works as before (one-release migration path)
 - [ ] 2a.5 — Unit tests: registry round-trip through encryption/decryption, revoked tokens rejected, expired tokens rejected
 
 ### 2b. Admin token + admin API
 
-- [ ] 2b.1 — Generate a cryptographically random admin token at first boot; print it once to stdout (`ADMIN TOKEN: <hex>`); never print again. Store its hash in `/data/admin.hash`
+- [ ] 2b.1 — Generate a cryptographically random admin token at first boot; print it once to stdout (`ADMIN TOKEN: <hex>`); store hash in `/data/admin.hash`
 - [ ] 2b.2 — Add `AdminAuth` extractor that validates `Authorization: Bearer <admin-token>` on all `/admin/*` routes using constant-time comparison
-- [ ] 2b.3 — Implement `POST /admin/tokens` — create token: body `{ "name": str, "routes": [str], "budget_requests": int?, "budget_tokens": int?, "expires_in_days": int? }`, returns `{ "id": uuid, "token": "<hex>", ...record }`
-- [ ] 2b.4 — Implement `DELETE /admin/tokens/:id` — revoke token (immediate effect, status set to Revoked, persisted)
+- [ ] 2b.3 — Implement `POST /admin/tokens` — body `{ "name": str, "routes": [str], "expires_in_days": int? }`, returns `{ "id": uuid, "token": "<hex>", ...record }`
+- [ ] 2b.4 — Implement `DELETE /admin/tokens/:id` — revoke token (immediate effect, persisted)
 - [ ] 2b.5 — Implement `GET /admin/tokens` — list all tokens (omit token value, include all metadata)
-- [ ] 2b.6 — Update auth middleware: look up incoming phantom in registry (constant-time); attach `TokenRecord` to request extensions for downstream use by policy and audit
+- [ ] 2b.6 — Update auth middleware: look up incoming phantom in registry (constant-time); attach `TokenRecord` to request extensions for downstream use
 
 ### 2c. `coco` CLI — token subcommands
 
 - [ ] 2c.1 — Add `coco` CLI binary (new crate `crates/coco-cli`) with subcommand structure
-- [ ] 2c.2 — `coco token create --name <str> [--routes <csv>] [--budget-requests <n>] [--budget-tokens <n>] [--expires <Nd>]` — calls `POST /admin/tokens`, prints token value once
+- [ ] 2c.2 — `coco token create --name <str> [--routes <csv>] [--expires <Nd>]` — calls `POST /admin/tokens`, prints token value once
 - [ ] 2c.3 — `coco token revoke <id|name>` — calls `DELETE /admin/tokens/:id`
 - [ ] 2c.4 — `coco token ls` — calls `GET /admin/tokens`, pretty-prints table
 - [ ] 2c.5 — CLI reads gateway URL + admin token from `~/.config/coco/config.toml` (or env vars `COCO_GATEWAY_URL`, `COCO_ADMIN_TOKEN`)
@@ -177,22 +282,19 @@ Replaces the single `COCO_PHANTOM_TOKEN` env var with a named, per-client token 
 
 ### 3a. Per-request policy enforcement
 
-- [ ] 3a.0 — Evaluate allowlist *before* credential resolution. Block the request and return `403` without touching the credential store if the target host+path is not in the allowlist. This is the correct order: a timing side-channel leaks credential existence if resolution happens first.
-- [ ] 3a.1 — Implement route allowlist check in proxy handler: if `TokenRecord.routes_allowlist` is non-empty and the request prefix is not in it, return `403 Forbidden`
-- [ ] 3a.2 — Implement daily request counter per token: atomic in-memory counter, reset at UTC midnight, persisted to `/data/counters.enc` on update. Reject with `429 Too Many Requests` when `budget_daily_requests` is exceeded
-- [ ] 3a.3 — Implement approximate daily token counter for LLM routes (anthropic, openai): parse `Content-Length` of request + response as proxy for token consumption (rough estimate; flag as approximate in audit log). Reject with `429` when `budget_daily_tokens` exceeded
-- [ ] 3a.4 — Hard expiry check: reject any request from a token whose `expires_at` is in the past with `401 Unauthorized`
-- [ ] 3a.5 — Unit tests: route allowlist blocks disallowed routes; daily request cap enforced; expiry enforced
+- [ ] 3a.0 — Evaluate allowlist *before* credential resolution. Return `403` without touching the credential store if the target host+path is not in the allowlist (avoids timing side-channel).
+- [ ] 3a.1 — Implement route allowlist check: if `TokenRecord.routes_allowlist` is non-empty and request prefix is not in it, return `403 Forbidden`
+- [ ] 3a.2 — Hard expiry check: reject requests from tokens whose `expires_at` is in the past with `401 Unauthorized`
+- [ ] 3a.3 — Unit tests: route allowlist blocks disallowed routes; expiry enforced
 
 ### 3b. Append-only structured audit log
 
-- [ ] 3b.0 — Implement response body credential redaction: after receiving upstream response, scan body for any injected credential value; replace with `[REDACTED_BY_COCO]` before forwarding to caller. Closes the credential-echo exfiltration path (API returns the key you sent it in an error message — agent then reads it). Keep a list of active credential values in-memory; wipe on revoke.
-- [ ] 3b.1 — Define `AuditEntry`: `timestamp`, `token_id`, `token_name`, `route`, `method`, `upstream_status`, `request_bytes`, `response_bytes`, `approx_tokens: Option<u64>`, `policy_action: Allow|DenyRoute|DenyBudget|DenyExpiry`
-  - Audit completeness note: if an agent holds its own token and calls GitHub/OpenAI directly (bypassing CoCo), that call is invisible to this log. This is acceptable — CoCo's protected credentials are not involved. Document this scope boundary explicitly in DEPLOY.md rather than framing it as an egress enforcement gap.
-- [ ] 3b.2 — Write one JSON line per request to `/data/audit.log` (newline-delimited JSON). File opened in append mode; no rotation in v1 (rotation is v1.x)
-- [ ] 3b.3 — Implement `GET /admin/audit` — returns last N entries (default 100, `?limit=N`). Query param `?token_id=<uuid>` filters by token
-- [ ] 3b.4 — Optional S3 sink: if `COCO_AUDIT_S3_BUCKET` and `COCO_AUDIT_S3_PREFIX` are set, flush completed log lines to S3 in background (best-effort, non-blocking)
-- [ ] 3b.5 — `coco audit tail` — polls `GET /admin/audit?limit=20` in a loop, pretty-prints new entries (SSE or polling)
+- [ ] 3b.0 — Implement response body credential redaction: scan upstream response body for injected credential values; replace with `[REDACTED_BY_COCO]` before forwarding. Closes the credential-echo exfiltration path.
+- [ ] 3b.1 — Define `AuditEntry`: `timestamp`, `token_id`, `token_name`, `route`, `method`, `upstream_status`, `request_bytes`, `response_bytes`, `policy_action: Allow|DenyRoute|DenyExpiry`
+- [ ] 3b.2 — Write one JSON line per request to `/data/audit.log` (newline-delimited). Append mode; no rotation in v1.
+- [ ] 3b.3 — Implement `GET /admin/audit` — returns last N entries (default 100, `?limit=N`, `?token_id=<uuid>` filter)
+- [ ] 3b.4 — Optional S3 sink: if `COCO_AUDIT_S3_BUCKET` is set, flush log lines to S3 in background (best-effort)
+- [ ] 3b.5 — `coco audit tail` — polls `GET /admin/audit?limit=20`, pretty-prints new entries
 - [ ] 3b.6 — `coco audit grep --token <name>` — queries `GET /admin/audit?token_id=<id>` and prints
 
 ---
@@ -201,52 +303,49 @@ Replaces the single `COCO_PHANTOM_TOKEN` env var with a named, per-client token 
 
 ### 4a. Sealed credential store
 
-- [ ] 4a.1 — Implement encrypted credential store: AES-256-GCM, key sealed inside TEE, persisted to `/data/credentials.enc`. Schema: `{ "<name>": { "value": str, "inject_header": str, "format": str, "upstream_scope": str? } }`
-  - `upstream_scope`: optional host+path prefix this credential is bound to (e.g. `api.openai.com/v1/*`). If set, gateway rejects injection into any request that doesn't match — credential-level scoping, not just token-level. Inspired by OneCLI's per-secret host binding.
-- [ ] 4a.2 — Implement `POST /admin/credentials` — add/update credential: body `{ "name": str, "value": str, "inject_header": str?, "format": str?, "upstream_scope": str? }`
-- [ ] 4a.3 — Implement `DELETE /admin/credentials/:name` — remove credential
-- [ ] 4a.4 — Implement `GET /admin/credentials` — list credential names (never values)
-- [ ] 4a.5 — Update route resolution: prefer sealed credentials over env var fallback; env vars remain as a backward-compatible fallback
+- [ ] 4a.1 — Implement encrypted credential store: AES-256-GCM, key sealed inside TEE, persisted to `/data/credentials.enc`
+- [ ] 4a.2 — Implement `POST /admin/credentials` — add/update credential
+- [ ] 4a.3 — Implement `DELETE /admin/credentials/:name`
+- [ ] 4a.4 — Implement `GET /admin/credentials` — list names only (never values)
+- [ ] 4a.5 — Update route resolution: prefer sealed credentials over env var fallback
 - [ ] 4a.6 — `coco creds add <name> <value> [--header <str>] [--format <str>]`
-- [ ] 4a.7 — `coco creds rotate <name> <new-value>` — replaces value in-place, zero downtime
+- [ ] 4a.7 — `coco creds rotate <name> <new-value>` — zero-downtime replacement
 - [ ] 4a.8 — `coco creds rm <name>`
 - [ ] 4a.9 — `coco creds ls`
 
 ### 4b. Deployment tooling
 
-- [ ] 4b.1 — `coco deploy phala` — one-shot helper: checks `phala` CLI is authenticated, pushes image to GHCR, calls `phala cvms create` with the compose file, waits for CVM to be up, calls `GET /attest`, prints MRTD and admin token
-- [ ] 4b.2 — `coco verify <gateway-url>` — fetches `GET /attest`, verifies TDX QuoteV4 against Intel PCS, asserts debug bit unset, prints MRTD for pinning
-- [ ] 4b.3 — Write `DEPLOY.md`: Phala account prerequisites → `coco deploy phala` → `coco verify` → `coco creds add` → `coco token create`. Under 15 minutes end-to-end
-- [ ] 4b.4 — Write `USING.md`: copy-paste recipes for Claude Code, OpenAI Python SDK, curl, GitHub Actions runner
+- [ ] 4b.1 — `coco deploy phala` — checks auth, pushes image to GHCR, creates CVM, waits for liveness, calls `GET /attest`, prints MRTD and admin token
+- [ ] 4b.2 — `coco verify <url>` — fetches `GET /attest`, verifies TDX QuoteV4, asserts no debug bit, prints MRTD
+- [ ] 4b.3 — Write `docs/DEPLOY.md`: end-to-end walkthrough under 15 minutes
 
 ### 4c. End-to-end test + release
 
-- [ ] 4c.1 — Extend `scripts/test-e2e.sh` to cover: registry token creation, routing enforcement (allowlist checked before credential resolution), budget cap (mock), revocation, credential-echo redaction, audit log entry verified with `token_name`
-- [ ] 4c.2 — Tag `v1.0.0`; publish release notes against the v1 definition of done in `product.md`
+- [ ] 4c.1 — Extend `scripts/test-e2e.sh`: registry token creation, routing enforcement, revocation, credential-echo redaction, audit log with `token_name`
+- [ ] 4c.2 — Tag `v1.0.0`; publish release notes
 
 ---
 
-## Post-v1 ideas (don't build now, don't forget)
+## Post-v1 ideas
 
-- **Derived credential injection**: instead of injecting the raw key, derive a short-lived scoped token inside the TEE (pre-signed URL, short-TTL JWT) and inject that. The real key never leaves even at the network layer. Natural evolution of the HSM analogy.
-- **`HTTPS_PROXY` transport mode**: allow any HTTP client to use CoCo without `BASE_URL` reconfiguration. Zero code changes for the agent. OneCLI's biggest UX win.
-- **`GET /attest` pinning in `coco token create`**: embed the current MRTD in the token record at creation time. A client can verify their phantom token was issued by the same binary version it can attest today. Closes the "trust on first use" window.
-- **Workload identity (no static credentials at all)**: agent proves its TEE identity to CoCo; CoCo derives an OAuth access token on the fly from a root signing key sealed in the enclave. Agent never receives any credential, static or derived. This is the Aembit model but with hardware attestation as root of trust instead of IAM.
+- **`HTTPS_PROXY` / CONNECT mode**: inject credentials via SSL interception. Unlocks zero-config agent integration for tools without a configurable base URL. Requires CA cert distribution.
+- **Local `coco` proxy mode**: a local process that sets env vars and proxies through the remote gateway, abstracting away per-tool configuration.
+- **Derived credential injection**: derive a short-lived scoped token inside the TEE instead of injecting the raw key.
+- **Workload identity**: agent proves TEE identity; CoCo derives credentials on the fly from a sealed root key.
 
 ---
 
-## Ordering / dependencies
+## Ordering
 
 ```
-1b (CVM attestation, in-flight)
-  └── 2a (encrypted registry)
-        └── 2b (admin API)
-              ├── 2c (CLI: token subcommands)
-              └── 3a (per-request policy)   ←── 3b (audit log)
-                                                   └── 3b.5-6 (CLI: audit subcommands)
-4a (sealed credential store)  ←── can start in parallel with 3a once 2b is done
-4b (deployment tooling)       ←── can start once 4a is mostly done
-4c (e2e test + release)       ←── final gate
+1a (done)
+  └── 1c (remote deploy — next)
+        └── 1b (CVM attestation — parallel or after 1c)
+              └── 2a (encrypted registry)
+                    └── 2b (admin API)
+                          ├── 2c (CLI: token subcommands)
+                          └── 3a (per-request policy) ←── 3b (audit log)
+4a (sealed cred store)  ←── parallel with 3a once 2b done
+4b (deploy tooling)     ←── after 4a
+4c (e2e + release)      ←── final gate
 ```
-
-Phases 2a–2c are the critical path to a useful system. Start there immediately after 1b ships.

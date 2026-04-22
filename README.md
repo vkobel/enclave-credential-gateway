@@ -2,7 +2,7 @@
 
 A credential proxy for AI agents: agents authenticate with a phantom token, the gateway validates it and injects the real upstream API key, so secrets never touch the agent's host.
 
-Built on [`nono-proxy`](./nono) — promoted into a remotely deployable, hardware-attested service.
+A remotely deployable, hardware-attested service.
 
 ---
 
@@ -80,7 +80,7 @@ Claude Code sends `x-api-key: my-secret` (or `Authorization: Bearer my-secret` w
 
 ## How It Works
 
-The gateway accepts the phantom token from the **same header the SDK uses for a real credential** (following nono's pattern). This means SDKs work without modification.
+The gateway accepts the phantom token from the **same header the SDK uses for a real credential**. SDKs work without modification.
 
 ```
 Claude Code / SDK
@@ -102,7 +102,7 @@ Accepted phantom token locations (checked in order):
 1. `Proxy-Authorization: Bearer <token>` — generic, works with `curl` and test scripts
 2. Route's own auth header (`x-api-key`, `Authorization: Bearer`, etc.) — used by SDK clients
 
-**Known gap (POC):** Agents route through the gateway voluntarily via `BASE_URL`. A compromised agent can bypass by connecting directly upstream. Mitigate with egress firewall rules. Path C (nono fork + Landlock enforcement) closes this properly.
+**Known gap (POC):** Agents route through the gateway voluntarily via `BASE_URL`. A compromised agent can bypass by connecting directly upstream. Mitigate with egress firewall rules.
 
 ---
 
@@ -209,19 +209,21 @@ Credentials not set are skipped (shown as `SKIP` in the output, not `FAIL`).
 
 ## Milestones
 
-**Phase 1a (current) — Plain infrastructure POC**
-`coco-gateway` binary on any Docker host. Proves the proxy data plane end-to-end.
+**Phase 1a — done.** Plain proxy on any Docker host. Phantom token auth, profile-based routing, multi-source credential injection.
 
-**Phase 1b — CVM attestation**
-Promote to Phala Cloud TDX CVM. Add `GET /attest` (raw TDX QuoteV4 via `tappd` sidecar).
+**Phase 1c — next.** Remote deploy with TLS (Caddy), path prefix stripping for `gh` CLI support, health endpoint.
 
-**Phase 2+ — Policy, identity, encrypted vaults, audit**
-See [`openspec/`](./openspec) for specs and task lists.
+**Phase 1b — CVM attestation.** Promote to Phala Cloud TDX CVM. Add `GET /attest` (TDX QuoteV4).
+
+**Phase 2+ — Policy, token registry, encrypted vaults, audit.**
+
+See [`docs/task.md`](./docs/task.md) for the full task list and progress.
 
 ---
 
 ## References
 
-- [`nono/`](./nono) — nono-proxy (phantom token pattern, route store, credential injection)
-- [`openspec/`](./openspec) — specs, design docs, task lists
+- [`docs/product.md`](./docs/product.md) — product vision
+- [`docs/task.md`](./docs/task.md) — task list and progress
+- [`docs/TEE-SECURITY.md`](./docs/TEE-SECURITY.md) — TEE security model
 - [Phala Cloud](https://phala.network) — TDX CVM deployment platform
