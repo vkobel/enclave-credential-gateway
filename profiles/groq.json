@@ -1,0 +1,15 @@
+{
+  "routes": {
+    "groq": {
+      "upstream": "https://api.groq.com",
+      "inject_mode": "header",
+      "credential_sources": [
+        {
+          "env": "GROQ_API_KEY",
+          "inject_header": "Authorization",
+          "format": "Bearer {}"
+        }
+      ]
+    }
+  }
+}

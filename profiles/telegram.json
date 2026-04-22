@@ -1,0 +1,16 @@
+{
+  "routes": {
+    "telegram": {
+      "upstream": "https://api.telegram.org",
+      "inject_mode": "url_path",
+      "url_path_prefix": "/bot",
+      "credential_sources": [
+        {
+          "env": "TELEGRAM_BOT_TOKEN",
+          "inject_header": "X-Unused",
+          "format": "{}"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "routes": {
+    "elevenlabs": {
+      "upstream": "https://api.elevenlabs.io",
+      "inject_mode": "header",
+      "credential_sources": [
+        {
+          "env": "ELEVENLABS_API_KEY",
+          "inject_header": "xi-api-key",
+          "format": "{}"
+        }
+      ]
+    }
+  }
+}

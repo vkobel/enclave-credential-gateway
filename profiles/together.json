@@ -1,0 +1,15 @@
+{
+  "routes": {
+    "together": {
+      "upstream": "https://api.together.xyz",
+      "inject_mode": "header",
+      "credential_sources": [
+        {
+          "env": "TOGETHER_API_KEY",
+          "inject_header": "Authorization",
+          "format": "Bearer {}"
+        }
+      ]
+    }
+  }
+}

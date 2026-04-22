@@ -1,19 +1,27 @@
 {
   "routes": {
-    "openai": {
-      "upstream": "https://api.openai.com",
-      "credential_env": "OPENAI_API_KEY"
-    },
     "anthropic": {
       "upstream": "https://api.anthropic.com",
+      "inject_mode": "header",
       "credential_sources": [
         {"env": "ANTHROPIC_API_KEY", "inject_header": "Authorization", "format": "Bearer {}", "prefix": "sk-ant-oat"},
         {"env": "ANTHROPIC_API_KEY", "inject_header": "x-api-key",     "format": "{}"}
       ]
     },
-    "github": {
+    "openai": {
+      "upstream": "https://api.openai.com",
+      "inject_mode": "header",
+      "credential_sources": [
+        {"env": "OPENAI_API_KEY", "inject_header": "Authorization", "format": "Bearer {}"}
+      ]
+    },
+    "api": {
       "upstream": "https://api.github.com",
-      "credential_env": "GITHUB_TOKEN"
+      "inject_mode": "header",
+      "strip_prefix": "/v3",
+      "credential_sources": [
+        {"env": "GITHUB_TOKEN", "inject_header": "Authorization", "format": "Bearer {}"}
+      ]
     },
     "httpbin": {
       "upstream": "https://httpbin.org",
