@@ -3,49 +3,11 @@
 /// Unit tests for auth middleware helpers
 mod auth_tests {
 
-    use coco_gateway::{validate_bearer_or_raw, validate_proxy_authorization};
+    use coco_gateway::validate_bearer_or_raw;
     use zeroize::Zeroizing;
 
     fn token(s: &str) -> Zeroizing<String> {
         Zeroizing::new(s.to_string())
-    }
-
-    // ── validate_proxy_authorization ──────────────────────────────────────
-
-    #[test]
-    fn test_bearer_proxy_auth_valid() {
-        let t = token("my-secret-token");
-        assert!(validate_proxy_authorization(b"Bearer my-secret-token", &t));
-    }
-
-    #[test]
-    fn test_bearer_proxy_auth_wrong() {
-        let t = token("correct");
-        assert!(!validate_proxy_authorization(b"Bearer wrong", &t));
-    }
-
-    #[test]
-    fn test_bearer_proxy_auth_case_insensitive_scheme() {
-        let t = token("my-secret-token");
-        assert!(validate_proxy_authorization(b"BEARER my-secret-token", &t));
-    }
-
-    #[test]
-    fn test_basic_proxy_auth_valid() {
-        use base64::Engine;
-        let t = token("my-secret");
-        let encoded = base64::engine::general_purpose::STANDARD.encode("user:my-secret");
-        let header = format!("Basic {}", encoded);
-        assert!(validate_proxy_authorization(header.as_bytes(), &t));
-    }
-
-    #[test]
-    fn test_basic_proxy_auth_wrong_password() {
-        use base64::Engine;
-        let t = token("correct");
-        let encoded = base64::engine::general_purpose::STANDARD.encode("user:wrong");
-        let header = format!("Basic {}", encoded);
-        assert!(!validate_proxy_authorization(header.as_bytes(), &t));
     }
 
     // ── validate_bearer_or_raw ────────────────────────────────────────────
@@ -72,6 +34,13 @@ mod auth_tests {
     fn test_authorization_bearer_phantom_case_insensitive() {
         let t = token("oauth-phantom");
         assert!(validate_bearer_or_raw(b"BEARER oauth-phantom", &t));
+    }
+
+    #[test]
+    fn test_authorization_token_phantom_gh_legacy() {
+        let t = token("gh-phantom");
+        assert!(validate_bearer_or_raw(b"token gh-phantom", &t));
+        assert!(validate_bearer_or_raw(b"Token gh-phantom", &t));
     }
 
     #[test]
@@ -245,7 +214,7 @@ mod gateway_tests {
         let client = reqwest::Client::new();
         let res = client
             .get("http://localhost:8080/test/")
-            .header("Proxy-Authorization", "Bearer wrong-token")
+            .header("Authorization", "Bearer wrong-token")
             .send()
             .await
             .expect("Gateway not running — start gateway and run with --features integration");
@@ -263,7 +232,7 @@ mod gateway_tests {
         let client = reqwest::Client::new();
         let res = client
             .get("http://localhost:8080/unknown-route/")
-            .header("Proxy-Authorization", format!("Bearer {}", phantom))
+            .header("Authorization", format!("Bearer {}", phantom))
             .send()
             .await
             .expect("Gateway not running — start gateway and run with --features integration");

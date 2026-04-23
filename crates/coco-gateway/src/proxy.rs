@@ -32,7 +32,7 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
         .get::<PhantomAuth>()
         .cloned()
         .unwrap_or(PhantomAuth {
-            header: "proxy-authorization".to_string(),
+            header: "authorization".to_string(),
             preferred_source: None,
             token_record: None,
         });
@@ -96,7 +96,6 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
     let mut headers = req.headers().clone();
 
     headers.remove(phantom_auth.header.as_str());
-    headers.remove("proxy-authorization");
     headers.remove("host");
 
     // Only inject credential into headers for Header mode

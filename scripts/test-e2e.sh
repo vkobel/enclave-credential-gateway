@@ -90,7 +90,7 @@ gw_request() {
   local path="$1"; shift
   GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
     -X "$method" \
-    -H "Proxy-Authorization: Bearer ${COCO_PHANTOM_TOKEN}" \
+    -H "Authorization: Bearer ${COCO_PHANTOM_TOKEN}" \
     "http://localhost:${GATEWAY_PORT}${path}" \
     "$@" 2>/dev/null)
   GW_BODY=$(cat "$GW_TMPFILE")
@@ -104,7 +104,7 @@ status=$(curl -s -o /dev/null -w "%{http_code}" \
 [[ "$status" == "407" ]] && pass "Missing token → 407" || fail "Missing token → expected 407, got $status"
 
 status=$(curl -s -o /dev/null -w "%{http_code}" \
-  -H "Proxy-Authorization: Bearer wrong-token" \
+  -H "Authorization: Bearer wrong-token" \
   "http://localhost:${GATEWAY_PORT}/openai/" 2>/dev/null)
 [[ "$status" == "407" ]] && pass "Wrong token → 407" || fail "Wrong token → expected 407, got $status"
 
@@ -133,11 +133,9 @@ else
     && pass "Authorization header injected correctly" \
     || fail "Authorization header wrong — got: '$injected', expected: 'Bearer ${HTTPBIN_TOKEN}'"
 
-  # Verify phantom token was stripped (httpbin must NOT see Proxy-Authorization)
-  proxy_auth=$(echo "$GW_BODY" | jq -r '.headers["Proxy-Authorization"] // empty' 2>/dev/null)
-  [[ -z "$proxy_auth" ]] \
-    && pass "Proxy-Authorization stripped before forwarding" \
-    || fail "Proxy-Authorization was NOT stripped — httpbin saw: '$proxy_auth'"
+  # The Authorization check above implicitly verifies the phantom was
+  # replaced with the real credential (if stripping failed, httpbin would
+  # see the phantom value instead of HTTPBIN_TOKEN).
 fi
 
 # ── Test: anthropic ───────────────────────────────────────────────────────────

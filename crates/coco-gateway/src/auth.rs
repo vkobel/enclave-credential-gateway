@@ -3,7 +3,7 @@
 use crate::profile::CredentialSource;
 use crate::registry::TokenRecord;
 use crate::state::AppState;
-use crate::{validate_bearer_or_raw, validate_proxy_authorization};
+use crate::validate_bearer_or_raw;
 
 use axum::{
     body::Body,
@@ -12,7 +12,6 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use base64::Engine;
 use std::sync::Arc;
 use tracing::{info, warn};
 use zeroize::Zeroizing;
@@ -26,51 +25,22 @@ pub struct PhantomAuth {
 
 pub fn extract_candidate_tokens(req: &Request<Body>) -> Vec<String> {
     let mut candidates = Vec::new();
-
-    if let Some(v) = req.headers().get("proxy-authorization") {
-        if let Ok(s) = v.to_str() {
-            let lower = s.to_lowercase();
-            if let Some(rest) = lower.strip_prefix("bearer ") {
-                candidates.push(rest.trim().to_string());
-            } else if let Some(rest) = lower.strip_prefix("basic ") {
-                if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(rest.trim()) {
-                    if let Ok(decoded_str) = std::str::from_utf8(&decoded) {
-                        if let Some((_, pw)) = decoded_str.split_once(':') {
-                            candidates.push(pw.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     for value in req.headers().values() {
         if let Ok(s) = value.to_str() {
             let lower = s.to_lowercase();
-            if let Some(rest) = lower.strip_prefix("bearer ") {
-                let candidate = rest.trim().to_string();
-                if !candidates.contains(&candidate) {
-                    candidates.push(candidate);
-                }
-            } else if let Some(rest) = lower.strip_prefix("token ") {
-                // GitHub CLI sends "Authorization: token <value>" (legacy GitHub format)
-                let candidate = rest.trim().to_string();
-                if !candidates.contains(&candidate) {
-                    candidates.push(candidate);
-                }
-            } else if !s.contains(':')
-                && !lower.starts_with("basic ")
-                && !lower.starts_with("bearer ")
-                && !lower.starts_with("token ")
-            {
-                let candidate = s.trim().to_string();
-                if !candidates.contains(&candidate) {
-                    candidates.push(candidate);
+            let candidate = if let Some(rest) = lower.strip_prefix("bearer ") {
+                Some(rest.trim().to_string())
+            } else {
+                // `gh` CLI sends `Authorization: token <value>` (GitHub legacy format)
+                lower.strip_prefix("token ").map(|rest| rest.trim().to_string())
+            };
+            if let Some(c) = candidate {
+                if !candidates.contains(&c) {
+                    candidates.push(c);
                 }
             }
         }
     }
-
     candidates
 }
 
@@ -79,16 +49,6 @@ pub fn find_phantom_auth(
     token: &Zeroizing<String>,
     sources: &[CredentialSource],
 ) -> Option<PhantomAuth> {
-    if let Some(v) = req.headers().get("proxy-authorization") {
-        if validate_proxy_authorization(v.as_bytes(), token) {
-            return Some(PhantomAuth {
-                header: "proxy-authorization".to_string(),
-                preferred_source: None,
-                token_record: None,
-            });
-        }
-    }
-
     for (i, src) in sources.iter().enumerate() {
         let header_lower = src.inject_header.to_lowercase();
         if let Some(v) = req.headers().get(header_lower.as_str()) {
@@ -99,6 +59,16 @@ pub fn find_phantom_auth(
                     token_record: None,
                 });
             }
+        }
+    }
+
+    if let Some(v) = req.headers().get("authorization") {
+        if validate_bearer_or_raw(v.as_bytes(), token) {
+            return Some(PhantomAuth {
+                header: "authorization".to_string(),
+                preferred_source: None,
+                token_record: None,
+            });
         }
     }
 
@@ -136,7 +106,7 @@ pub async fn auth_middleware(
                 }
                 info!("{} {} — auth ok (token: '{}')", method, path, record.name);
                 let auth = PhantomAuth {
-                    header: "proxy-authorization".to_string(),
+                    header: "authorization".to_string(),
                     preferred_source: None,
                     token_record: Some(record),
                 };
