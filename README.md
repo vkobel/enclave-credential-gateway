@@ -48,7 +48,7 @@ coco token create --name laptop --scope github,httpbin
 **5. Activate and verify:**
 
 ```bash
-eval $(coco env laptop)    # sets GH_HOST, GH_TOKEN, ANTHROPIC_BASE_URL, OPENAI_BASE_URL, ...
+eval $(coco env laptop)    # sets GH_HOST, GH_ENTERPRISE_TOKEN, GH_TOKEN, ANTHROPIC_BASE_URL, OPENAI_BASE_URL, ...
 
 # Smoke test — any phantom token, no real upstream credential needed
 curl http://localhost:8080/httpbin/bearer \
@@ -167,6 +167,7 @@ This sets:
 | `OPENAI_BASE_URL` | `https://gw.example.com/openai` |
 | `OPENAI_API_KEY` | phantom token |
 | `GH_HOST` | `gw.example.com` |
+| `GH_ENTERPRISE_TOKEN` | phantom token used by `gh` for custom/non-`github.com` hosts |
 | `GH_TOKEN` | phantom token |
 | `OLLAMA_HOST` | `https://gw.example.com/ollama` |
 

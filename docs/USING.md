@@ -139,13 +139,14 @@ gh repo list
 
 ```bash
 export GH_HOST=gw.example.com
-export GH_TOKEN=ccgw_...
+export GH_ENTERPRISE_TOKEN=ccgw_...
+export GH_TOKEN=$GH_ENTERPRISE_TOKEN   # optional alias for curl/examples
 gh repo list
 ```
 
 `GH_HOST` tells `gh` to route all API requests through the gateway instead of directly to `api.github.com`. `gh` appends `/api/v3/` to any custom host; the `github` route has a built-in alias for that prefix and strips it before forwarding to `api.github.com` with the real `GITHUB_TOKEN`.
 
-> **Note:** `GH_HOST` is a hostname, not a full URL. `coco env` sets it correctly.
+> **Note:** `GH_HOST` is a hostname, not a full URL. For custom hosts such as `localhost` or `gw.example.com`, `gh` reads `GH_ENTERPRISE_TOKEN`, not `GH_TOKEN`. `coco env` exports both so `gh` and curl examples work out of the box.
 
 ---
 
