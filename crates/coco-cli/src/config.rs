@@ -3,18 +3,26 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TokenEntry {
+    pub token: String,
+    #[serde(default)]
+    pub scope: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
     pub gateway_url: String,
     pub admin_token: Option<String>,
     #[serde(default)]
-    pub tokens: HashMap<String, String>,
+    pub tokens: HashMap<String, TokenEntry>,
 }
 
 impl Config {
     pub fn path() -> PathBuf {
-        dirs::config_dir()
+        dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
+            .join(".config")
             .join("coco")
             .join("config.toml")
     }
@@ -22,16 +30,16 @@ impl Config {
     pub fn load() -> Result<Config> {
         let path = Self::path();
         if !path.exists() {
-            anyhow::bail!("Config not found at {}. Run: mkdir -p ~/.config/coco && create config.toml", path.display());
+            anyhow::bail!(
+                "Config not found at {}. Run: mkdir -p ~/.config/coco && create config.toml",
+                path.display()
+            );
         }
-        let data = std::fs::read_to_string(&path)
-            .context("Failed to read config")?;
-        let config: Config = toml::from_str(&data)
-            .context("Failed to parse config")?;
+        let data = std::fs::read_to_string(&path).context("Failed to read config")?;
+        let config: Config = toml::from_str(&data).context("Failed to parse config")?;
         Ok(config)
     }
 
-    #[allow(dead_code)]
     pub fn save(&self) -> Result<()> {
         let path = Self::path();
         if let Some(parent) = path.parent() {

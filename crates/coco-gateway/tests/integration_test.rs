@@ -3,7 +3,7 @@
 /// Unit tests for auth middleware helpers
 mod auth_tests {
 
-    use coco_gateway::{validate_proxy_authorization, validate_bearer_or_raw};
+    use coco_gateway::{validate_bearer_or_raw, validate_proxy_authorization};
     use zeroize::Zeroizing;
 
     fn token(s: &str) -> Zeroizing<String> {
@@ -142,7 +142,11 @@ mod profile_tests {
         assert_eq!(prefix, "openai");
 
         let path2 = "/anthropic/v1/messages";
-        let prefix2 = path2.trim_start_matches('/').split('/').next().unwrap_or("");
+        let prefix2 = path2
+            .trim_start_matches('/')
+            .split('/')
+            .next()
+            .unwrap_or("");
         assert_eq!(prefix2, "anthropic");
     }
 
@@ -218,7 +222,10 @@ mod gateway_tests {
     use reqwest::StatusCode;
 
     #[tokio::test]
-    #[cfg_attr(not(feature = "integration"), ignore = "Requires running gateway. Run with: cargo test --features integration")]
+    #[cfg_attr(
+        not(feature = "integration"),
+        ignore = "Requires running gateway. Run with: cargo test --features integration"
+    )]
     async fn test_missing_phantom_token_returns_407() {
         let client = reqwest::Client::new();
         let res = client
@@ -230,7 +237,10 @@ mod gateway_tests {
     }
 
     #[tokio::test]
-    #[cfg_attr(not(feature = "integration"), ignore = "Requires running gateway. Run with: cargo test --features integration")]
+    #[cfg_attr(
+        not(feature = "integration"),
+        ignore = "Requires running gateway. Run with: cargo test --features integration"
+    )]
     async fn test_wrong_phantom_token_returns_407() {
         let client = reqwest::Client::new();
         let res = client
@@ -243,7 +253,10 @@ mod gateway_tests {
     }
 
     #[tokio::test]
-    #[cfg_attr(not(feature = "integration"), ignore = "Requires running gateway. Run with: cargo test --features integration")]
+    #[cfg_attr(
+        not(feature = "integration"),
+        ignore = "Requires running gateway. Run with: cargo test --features integration"
+    )]
     async fn test_unknown_route_returns_404() {
         let phantom = std::env::var("TEST_PHANTOM_TOKEN")
             .expect("TEST_PHANTOM_TOKEN must be set for integration tests");
@@ -276,9 +289,15 @@ mod header_tests {
 
     #[test]
     fn test_credential_formatting() {
-        assert_eq!("Bearer {}".replace("{}", "sk-openai-123"), "Bearer sk-openai-123");
+        assert_eq!(
+            "Bearer {}".replace("{}", "sk-openai-123"),
+            "Bearer sk-openai-123"
+        );
         assert_eq!("{}".replace("{}", "sk-ant-api-456"), "sk-ant-api-456");
-        assert_eq!("Bearer {}".replace("{}", "sk-ant-oat01-789"), "Bearer sk-ant-oat01-789");
+        assert_eq!(
+            "Bearer {}".replace("{}", "sk-ant-oat01-789"),
+            "Bearer sk-ant-oat01-789"
+        );
     }
 
     #[test]
@@ -314,8 +333,14 @@ mod header_tests {
         let credential = "123456:ABC-DEF";
         let upstream_path = "/sendMessage";
         let query = "";
-        let url = format!("{}{}{}{}{}", upstream, url_path_prefix, credential, upstream_path, query);
-        assert_eq!(url, "https://api.telegram.org/bot123456:ABC-DEF/sendMessage");
+        let url = format!(
+            "{}{}{}{}{}",
+            upstream, url_path_prefix, credential, upstream_path, query
+        );
+        assert_eq!(
+            url,
+            "https://api.telegram.org/bot123456:ABC-DEF/sendMessage"
+        );
     }
 
     #[test]
@@ -326,7 +351,10 @@ mod header_tests {
         let inject_param = "api_key";
         let credential = "my-key";
         let sep = "?";
-        let url = format!("{}{}{}{}{}{}", upstream, upstream_path, query, sep, inject_param, credential);
+        let url = format!(
+            "{}{}{}{}{}{}",
+            upstream, upstream_path, query, sep, inject_param, credential
+        );
         assert_eq!(url, "https://example.com/api/data?api_keymy-key");
     }
 
@@ -338,7 +366,10 @@ mod header_tests {
         let inject_param = "api_key";
         let credential = "my-key";
         let sep = "&";
-        let url = format!("{}{}{}{}{}{}", upstream, upstream_path, query, sep, inject_param, credential);
+        let url = format!(
+            "{}{}{}{}{}{}",
+            upstream, upstream_path, query, sep, inject_param, credential
+        );
         assert_eq!(url, "https://example.com/api/data?foo=bar&api_keymy-key");
     }
 
@@ -348,7 +379,9 @@ mod header_tests {
         let prefix = "api";
         let upstream_path = &path[prefix.len() + 1..]; // "/v3/user"
         let strip_prefix = "/v3";
-        let stripped = upstream_path.strip_prefix(strip_prefix).unwrap_or(upstream_path);
+        let stripped = upstream_path
+            .strip_prefix(strip_prefix)
+            .unwrap_or(upstream_path);
         assert_eq!(stripped, "/user");
     }
 }
@@ -403,7 +436,9 @@ mod registry_tests {
     #[tokio::test]
     async fn test_list_tokens_omits_token_value() {
         let (registry, _dir) = create_registry().await;
-        registry.create_token("laptop".to_string(), vec!["anthropic".to_string()]).await;
+        registry
+            .create_token("laptop".to_string(), vec!["anthropic".to_string()])
+            .await;
         registry.create_token("ci".to_string(), vec![]).await;
 
         let tokens = registry.list_tokens().await;
@@ -430,7 +465,9 @@ mod registry_tests {
     #[tokio::test]
     async fn test_scope_enforcement() {
         let (registry, _dir) = create_registry().await;
-        let (_record, scoped_token) = registry.create_token("scoped".to_string(), vec!["httpbin".to_string()]).await;
+        let (_record, scoped_token) = registry
+            .create_token("scoped".to_string(), vec!["httpbin".to_string()])
+            .await;
 
         let validated = registry.validate(&scoped_token).await.unwrap();
         assert_eq!(validated.scope, vec!["httpbin"]);

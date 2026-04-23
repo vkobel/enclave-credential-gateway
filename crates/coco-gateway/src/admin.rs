@@ -44,7 +44,10 @@ pub fn admin_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/admin/tokens", post(create_token).get(list_tokens))
         .route("/admin/tokens/{id}", delete(revoke_token))
-        .layer(axum::middleware::from_fn_with_state(state, admin_auth_middleware))
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            admin_auth_middleware,
+        ))
 }
 
 async fn admin_auth_middleware(
@@ -74,7 +77,13 @@ async fn create_token(
 ) -> Response {
     let registry = match &state.token_registry {
         Some(r) => r,
-        None => return (StatusCode::SERVICE_UNAVAILABLE, "Token registry not configured").into_response(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Token registry not configured",
+            )
+                .into_response()
+        }
     };
 
     let (record, token_value) = registry.create_token(req.name, req.scope).await;
@@ -89,12 +98,16 @@ async fn create_token(
     .into_response()
 }
 
-async fn list_tokens(
-    State(state): State<Arc<AppState>>,
-) -> Response {
+async fn list_tokens(State(state): State<Arc<AppState>>) -> Response {
     let registry = match &state.token_registry {
         Some(r) => r,
-        None => return (StatusCode::SERVICE_UNAVAILABLE, "Token registry not configured").into_response(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Token registry not configured",
+            )
+                .into_response()
+        }
     };
 
     let tokens = registry.list_tokens().await;
@@ -115,13 +128,16 @@ async fn list_tokens(
     Json(items).into_response()
 }
 
-async fn revoke_token(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn revoke_token(State(state): State<Arc<AppState>>, Path(id): Path<Uuid>) -> Response {
     let registry = match &state.token_registry {
         Some(r) => r,
-        None => return (StatusCode::SERVICE_UNAVAILABLE, "Token registry not configured").into_response(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Token registry not configured",
+            )
+                .into_response()
+        }
     };
 
     if registry.revoke_token(id).await {

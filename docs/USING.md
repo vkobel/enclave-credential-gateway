@@ -177,7 +177,7 @@ Telegram's Bot API embeds the token in the URL path (`/bot<TOKEN>/<method>`), so
 
 ```bash
 curl "https://gw.example.com/telegram/getMe" \
-  -H "Proxy-Authorization: Bearer ccgw_..."
+  -H "Authorization: Bearer ccgw_..."
 # gateway rewrites path to /bot<TELEGRAM_BOT_TOKEN>/getMe before forwarding
 ```
 
@@ -205,7 +205,7 @@ curl https://gw.example.com/health
 
 # Smoke test — no real upstream credential needed; httpbin echoes the token back
 curl https://gw.example.com/httpbin/bearer \
-  -H "Proxy-Authorization: Bearer ccgw_..."
+  -H "Authorization: Bearer ccgw_..."
 # {"authenticated": true, "token": "any-value"}
 
 # Test scope enforcement: request a route not in the token's scope

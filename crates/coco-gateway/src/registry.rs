@@ -69,12 +69,15 @@ impl TokenRegistry {
         let hash = blake3::hash(token.as_bytes());
         let hash_bytes = hash.as_bytes();
         let tokens = self.tokens.read().await;
-        tokens.iter().find(|r| {
-            r.status == TokenStatus::Active
-                && hex::decode(&r.token_hash)
-                    .map(|h| h.ct_eq(hash_bytes).into())
-                    .unwrap_or(false)
-        }).cloned()
+        tokens
+            .iter()
+            .find(|r| {
+                r.status == TokenStatus::Active
+                    && hex::decode(&r.token_hash)
+                        .map(|h| h.ct_eq(hash_bytes).into())
+                        .unwrap_or(false)
+            })
+            .cloned()
     }
 
     pub async fn list_tokens(&self) -> Vec<TokenRecord> {

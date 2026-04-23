@@ -42,15 +42,7 @@ Scope values are the route keys defined in the profile. The `github` route has a
 ```bash
 coco token create --name laptop --scope github,httpbin
 # id:         ...
-# token:      ccgw_...    ← shown once; save it
-```
-
-Add the token to your config:
-
-```toml
-# ~/.config/coco/config.toml
-[tokens]
-laptop = "ccgw_..."
+# token:      ccgw_...    ← saved automatically to ~/.config/coco/config.toml
 ```
 
 **5. Activate and verify:**
@@ -60,7 +52,7 @@ eval $(coco env laptop)    # sets GH_HOST, GH_TOKEN, ANTHROPIC_BASE_URL, OPENAI_
 
 # Smoke test — any phantom token, no real upstream credential needed
 curl http://localhost:8080/httpbin/bearer \
-  -H "Proxy-Authorization: Bearer $GH_TOKEN"
+  -H "Authorization: Bearer $GH_TOKEN"
 # {"authenticated": true, "token": "any-value"}
 
 # GitHub — uses real GITHUB_TOKEN injected on the gateway side
@@ -239,8 +231,8 @@ Agent (Claude Code / SDK / gh / curl)
 ```
 
 Accepted phantom token locations (checked in order):
-1. `Proxy-Authorization: Bearer <token>` — explicit proxy credential
-2. Route's own auth header (`x-api-key`, `Authorization: Bearer`, etc.) — used by SDK clients
+1. `Authorization: Bearer <token>` — works through TLS termination proxies (Caddy, etc.)
+2. Route's own auth header (`x-api-key`, `Authorization: token`, etc.) — used by SDK clients
 
 Response codes:
 - `200` — success
@@ -368,7 +360,7 @@ TOKEN=$(curl -s -X POST http://localhost:8080/admin/tokens \
   -d '{"name":"smoke"}' | jq -r .token)
 
 curl http://localhost:8080/httpbin/bearer \
-  -H "Proxy-Authorization: Bearer $TOKEN"
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ---

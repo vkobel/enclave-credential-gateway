@@ -12,10 +12,11 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use std::sync::Arc;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body>) -> Response {
-    let path = req.uri().path();
+    let path = req.uri().path().to_string();
+    let method = req.method().clone();
 
     let stripped = path.trim_start_matches('/');
     let prefix = stripped.split('/').next().unwrap_or("");
@@ -26,11 +27,15 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
         None => return (StatusCode::NOT_FOUND, "404 Not Found").into_response(),
     };
 
-    let phantom_auth = req.extensions().get::<PhantomAuth>().cloned().unwrap_or(PhantomAuth {
-        header: "proxy-authorization".to_string(),
-        preferred_source: None,
-        token_record: None,
-    });
+    let phantom_auth = req
+        .extensions()
+        .get::<PhantomAuth>()
+        .cloned()
+        .unwrap_or(PhantomAuth {
+            header: "proxy-authorization".to_string(),
+            preferred_source: None,
+            token_record: None,
+        });
 
     let resolved = resolve_credential(&entry.credential_sources, phantom_auth.preferred_source);
     let (src, credential) = match resolved {
@@ -43,24 +48,40 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
 
     let upstream_path = &path[prefix.len() + 1..];
     let upstream_path = if let Some(sp) = &entry.strip_prefix {
-        upstream_path.strip_prefix(sp.as_str()).unwrap_or(upstream_path)
+        upstream_path
+            .strip_prefix(sp.as_str())
+            .unwrap_or(upstream_path)
     } else {
         upstream_path
     };
-    let upstream_path = if upstream_path.is_empty() { "/" } else { upstream_path };
+    let upstream_path = if upstream_path.is_empty() {
+        "/"
+    } else {
+        upstream_path
+    };
 
-    let query = req.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
+    let query = req
+        .uri()
+        .query()
+        .map(|q| format!("?{q}"))
+        .unwrap_or_default();
 
     let upstream_url = match &entry.inject_mode {
         InjectMode::Header => format!("{}{}{}", entry.upstream, upstream_path, query),
         InjectMode::UrlPath => {
             let pfx = entry.url_path_prefix.as_deref().unwrap_or("");
-            format!("{}{}{}{}{}", entry.upstream, pfx, credential, upstream_path, query)
+            format!(
+                "{}{}{}{}{}",
+                entry.upstream, pfx, credential, upstream_path, query
+            )
         }
         InjectMode::QueryParam => {
             let param = entry.inject_param.as_deref().unwrap_or("api_key");
             let sep = if query.is_empty() { "?" } else { "&" };
-            format!("{}{}{}{}{}{}", entry.upstream, upstream_path, query, sep, param, credential)
+            format!(
+                "{}{}{}{}{}{}",
+                entry.upstream, upstream_path, query, sep, param, credential
+            )
         }
     };
 
@@ -72,7 +93,6 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
         }
     };
 
-    let method = req.method().clone();
     let mut headers = req.headers().clone();
 
     headers.remove(phantom_auth.header.as_str());
@@ -85,7 +105,8 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
         if let Ok(header_name) = HeaderName::from_bytes(src.inject_header.as_bytes()) {
             headers.insert(
                 header_name,
-                HeaderValue::from_str(&inject_value).unwrap_or_else(|_| HeaderValue::from_static("")),
+                HeaderValue::from_str(&inject_value)
+                    .unwrap_or_else(|_| HeaderValue::from_static("")),
             );
         }
     }
@@ -104,7 +125,7 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
         }
     };
 
-    let mut upstream_req = Request::builder().method(method).uri(upstream_uri);
+    let mut upstream_req = Request::builder().method(&method).uri(upstream_uri);
     for (k, v) in &headers {
         upstream_req = upstream_req.header(k, v);
     }
@@ -119,6 +140,7 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
     match state.https_client.request(upstream_req).await {
         Ok(resp) => {
             let status = resp.status();
+            info!("{} {} → {} [{}]", method, path, upstream_url, status);
             let resp_headers = resp.headers().clone();
             let body = Body::new(
                 resp.into_body()
@@ -154,6 +176,9 @@ pub fn resolve_credential(
         }
     }
     sources.iter().find_map(|src| {
-        std::env::var(&src.env).ok().filter(|v| matches(src, v)).map(|v| (src, v))
+        std::env::var(&src.env)
+            .ok()
+            .filter(|v| matches(src, v))
+            .map(|v| (src, v))
     })
 }

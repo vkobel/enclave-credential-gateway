@@ -2,3 +2,8 @@ services:
   coco-gateway:
     ports:
       - "8080:8080"
+
+  caddy:
+    ports:
+      - "443:443"
+      - "80:80"

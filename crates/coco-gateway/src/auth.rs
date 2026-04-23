@@ -3,7 +3,7 @@
 use crate::profile::CredentialSource;
 use crate::registry::TokenRecord;
 use crate::state::AppState;
-use crate::{validate_proxy_authorization, validate_bearer_or_raw};
+use crate::{validate_bearer_or_raw, validate_proxy_authorization};
 
 use axum::{
     body::Body,
@@ -14,7 +14,7 @@ use axum::{
 };
 use base64::Engine;
 use std::sync::Arc;
-use tracing::warn;
+use tracing::{info, warn};
 use zeroize::Zeroizing;
 
 #[derive(Clone)]
@@ -52,7 +52,17 @@ pub fn extract_candidate_tokens(req: &Request<Body>) -> Vec<String> {
                 if !candidates.contains(&candidate) {
                     candidates.push(candidate);
                 }
-            } else if !s.contains(':') && !lower.starts_with("basic ") && !lower.starts_with("bearer ") {
+            } else if let Some(rest) = lower.strip_prefix("token ") {
+                // GitHub CLI sends "Authorization: token <value>" (legacy GitHub format)
+                let candidate = rest.trim().to_string();
+                if !candidates.contains(&candidate) {
+                    candidates.push(candidate);
+                }
+            } else if !s.contains(':')
+                && !lower.starts_with("basic ")
+                && !lower.starts_with("bearer ")
+                && !lower.starts_with("token ")
+            {
                 let candidate = s.trim().to_string();
                 if !candidates.contains(&candidate) {
                     candidates.push(candidate);
@@ -100,7 +110,8 @@ pub async fn auth_middleware(
     mut req: Request<Body>,
     next: Next,
 ) -> Response {
-    let path = req.uri().path();
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
     let prefix = path.trim_start_matches('/').split('/').next().unwrap_or("");
     let canonical = state.resolve_route_key(prefix);
     let sources: &[CredentialSource] = state
@@ -116,8 +127,14 @@ pub async fn auth_middleware(
         for candidate in candidates {
             if let Some(record) = registry.validate(&candidate).await {
                 if !record.scope.is_empty() && !record.scope.iter().any(|s| s == canonical) {
-                    return (StatusCode::FORBIDDEN, "403 Forbidden — token scope denied").into_response();
+                    warn!(
+                        "{} {} — 403 token '{}' not scoped for route '{}'",
+                        method, path, record.name, canonical
+                    );
+                    return (StatusCode::FORBIDDEN, "403 Forbidden — token scope denied")
+                        .into_response();
                 }
+                info!("{} {} — auth ok (token: '{}')", method, path, record.name);
                 let auth = PhantomAuth {
                     header: "proxy-authorization".to_string(),
                     preferred_source: None,
@@ -132,11 +149,16 @@ pub async fn auth_middleware(
     // 2. Fallback to COCO_PHANTOM_TOKEN
     if let Some(ref phantom) = state.phantom_token {
         if let Some(auth) = find_phantom_auth(&req, phantom, sources) {
+            info!("{} {} — auth ok (phantom token)", method, path);
             req.extensions_mut().insert(auth);
             return next.run(req).await;
         }
     }
 
-    warn!("Invalid or missing phantom token");
-    (StatusCode::PROXY_AUTHENTICATION_REQUIRED, "407 Proxy Authentication Required").into_response()
+    warn!("{} {} — 407 missing or invalid token", method, path);
+    (
+        StatusCode::PROXY_AUTHENTICATION_REQUIRED,
+        "407 Proxy Authentication Required",
+    )
+        .into_response()
 }

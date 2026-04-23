@@ -3,20 +3,34 @@ use anyhow::{Context, Result};
 
 pub fn run(name: &str, codex: bool) -> Result<()> {
     let config = Config::load()?;
-    let token = config.tokens.get(name)
+    let entry = config.tokens.get(name)
         .ok_or_else(|| anyhow::anyhow!("Token '{}' not found in config", name))?;
 
     let base = config.gateway_url.trim_end_matches('/');
+    let token = &entry.token;
+    let all = entry.scope.is_empty();
+    let has = |route: &str| all || entry.scope.iter().any(|s| s == route);
 
-    println!("export ANTHROPIC_BASE_URL={}/anthropic", base);
-    println!("export ANTHROPIC_API_KEY={}", token);
-    println!("export OPENAI_BASE_URL={}/openai", base);
-    println!("export OPENAI_API_KEY={}", token);
-    println!("export GH_HOST={}", host_only(base));
-    println!("export GH_TOKEN={}", token);
-    println!("export OLLAMA_HOST={}/ollama", base);
+    if has("anthropic") {
+        println!("export ANTHROPIC_BASE_URL={}/anthropic", base);
+        println!("export ANTHROPIC_API_KEY={}", token);
+    }
+    if has("openai") {
+        println!("export OPENAI_BASE_URL={}/openai", base);
+        println!("export OPENAI_API_KEY={}", token);
+    }
+    if has("github") {
+        println!("export GH_HOST={}", host_only(base));
+        println!("export GH_TOKEN={}", token);
+    }
+    if has("ollama") {
+        println!("export OLLAMA_HOST={}/ollama", base);
+    }
+    if has("httpbin") {
+        println!("export HTTPBIN_TOKEN={}", token);
+    }
 
-    if codex {
+    if codex && has("openai") {
         write_codex_config(base, token)?;
     }
 
@@ -24,7 +38,9 @@ pub fn run(name: &str, codex: bool) -> Result<()> {
 }
 
 fn host_only(url: &str) -> String {
-    let stripped = url.trim_start_matches("https://").trim_start_matches("http://");
+    let stripped = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
     stripped.split('/').next().unwrap_or(stripped).to_string()
 }
 

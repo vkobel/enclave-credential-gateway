@@ -137,6 +137,7 @@ Goal: a remotely deployable gateway that any agent or tool can connect to, with 
 
 - [x] 1c.1 — Add `GET /health` unauthenticated endpoint returning `200 OK {"status":"ok"}`.
 - [x] 1c.2 — Add `strip_prefix` field to route config (optional string). When set, strip that prefix from the incoming path before forwarding. Needed for `GH_HOST` support: GitHub Enterprise clients route to `/api/v3/...`; stripping `/api/v3` before forwarding to `api.github.com` makes it transparent.
+  - ⚠️ Known limitation: the path-prefix + alias approach (`"api" → github`) conflicts with any other registered route that also uses `/api/` as its base path. CLI tools like `gh` cannot include a path in `GH_HOST`, so they always hit the root of a hostname — path-prefix routing is inherently fragile for them. See post-v1: **Host-based routing**.
 - [x] 1c.3 — Add Caddy service to `docker-compose.yml` for automatic TLS termination (Let's Encrypt). Caddy proxies `443 → 8080`. Gateway itself stays HTTP-only behind it.
 
 ### 1c-B. Named service profile library
@@ -328,6 +329,7 @@ Replaces the single `COCO_PHANTOM_TOKEN` env var with a named, per-client token 
 
 ## Post-v1 ideas
 
+- **Host-based routing**: each service gets its own subdomain (`github.localhost`, `openai.localhost`, …). Caddy routes by `Host` header and injects `X-Coco-Route: <service>`; the gateway checks that header before falling back to path prefix. Eliminates the `/api` alias conflict and works naturally with CLI tools (`GH_HOST=github.localhost`) since they cannot include a path in the host setting. Path-prefix routing stays as a fallback for SDK clients. `coco env` would emit per-service hostnames instead of a single gateway URL.
 - **`HTTPS_PROXY` / CONNECT mode**: inject credentials via SSL interception. Unlocks zero-config agent integration for tools without a configurable base URL. Requires CA cert distribution.
 - **Local `coco` proxy mode**: a local process that sets env vars and proxies through the remote gateway, abstracting away per-tool configuration.
 - **Derived credential injection**: derive a short-lived scoped token inside the TEE instead of injecting the raw key.

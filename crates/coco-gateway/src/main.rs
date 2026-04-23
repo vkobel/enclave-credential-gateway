@@ -1,18 +1,18 @@
 //! CoCo Credential Gateway — startup and router assembly.
 
-use coco_gateway::AppState;
 use coco_gateway::admin::admin_router;
 use coco_gateway::auth::auth_middleware;
 use coco_gateway::health::health_handler;
 use coco_gateway::profile::load_profile;
 use coco_gateway::proxy::proxy_handler;
 use coco_gateway::registry::TokenRegistry;
+use coco_gateway::AppState;
 
-use axum::{Router, middleware, routing::get};
+use axum::{middleware, routing::get, Router};
 use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::client::legacy::Client;
-use std::sync::Arc;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::{error, info};
 use zeroize::Zeroizing;
 
@@ -87,7 +87,10 @@ async fn main() {
     let (routes, profile_path) = load_profile();
     match profile_path {
         Some(p) => info!("Loaded {} route(s) from profile at {}", routes.len(), p),
-        None => info!("No profile found, using built-in defaults ({} routes)", routes.len()),
+        None => info!(
+            "No profile found, using built-in defaults ({} routes)",
+            routes.len()
+        ),
     }
 
     let route_aliases: std::collections::HashMap<String, String> = routes
@@ -118,16 +121,21 @@ async fn main() {
         .merge(
             Router::new()
                 .fallback(proxy_handler)
-                .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    auth_middleware,
+                ))
                 .with_state(state.clone()),
         )
         .with_state(state);
 
     let addr = format!("0.0.0.0:{port}");
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap_or_else(|e| {
-        error!("Failed to bind to {}: {}", addr, e);
-        std::process::exit(1);
-    });
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .unwrap_or_else(|e| {
+            error!("Failed to bind to {}: {}", addr, e);
+            std::process::exit(1);
+        });
 
     info!("coco-gateway listening on {}", addr);
     axum::serve(listener, app).await.expect("server error");
