@@ -146,7 +146,7 @@ gh repo list
 
 `GH_HOST` tells `gh` to route all API requests through the gateway instead of directly to `api.github.com`. `gh` appends `/api/v3/` to any custom host; the `github` route has a built-in alias for that prefix and strips it before forwarding to `api.github.com` with the real `GITHUB_TOKEN`.
 
-> **Note:** `GH_HOST` is a hostname, not a full URL. For custom hosts such as `localhost` or `gw.example.com`, `gh` reads `GH_ENTERPRISE_TOKEN`, not `GH_TOKEN`. `coco env` exports both so `gh` and curl examples work out of the box.
+> **Note:** `GH_HOST` is a hostname, not a full URL. `gh` treats any `GH_HOST` other than `github.com` as a GitHub Enterprise host and reads `GH_ENTERPRISE_TOKEN` (not `GH_TOKEN`). `coco env` exports both so `gh` works for the gateway host and `GH_TOKEN` stays available for curl/manual examples.
 
 ---
 
@@ -242,3 +242,4 @@ Revocation takes effect immediately. In-flight requests complete; all subsequent
 | `503 Service Unavailable` | Real credential env var missing on the gateway | Set the credential env var and restart |
 | `coco env` fails | Token not in config file | Add `[tokens] laptop = "ccgw_..."` to `~/.config/coco/config.toml` |
 | `GH_HOST` is wrong | Set to full URL instead of hostname | `GH_HOST` must be just the hostname (`gw.example.com`), not a URL |
+| `gh` returns 407 despite `GH_TOKEN` being set | `gh` treats custom `GH_HOST` as Enterprise and ignores `GH_TOKEN` | Export `GH_ENTERPRISE_TOKEN` (or run `eval $(coco env <name>)` which sets both) |

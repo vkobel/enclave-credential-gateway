@@ -167,8 +167,8 @@ This sets:
 | `OPENAI_BASE_URL` | `https://gw.example.com/openai` |
 | `OPENAI_API_KEY` | phantom token |
 | `GH_HOST` | `gw.example.com` |
-| `GH_ENTERPRISE_TOKEN` | phantom token used by `gh` for custom/non-`github.com` hosts |
-| `GH_TOKEN` | phantom token |
+| `GH_ENTERPRISE_TOKEN` | phantom token — `gh` treats any `GH_HOST` other than `github.com` as an Enterprise host and reads this var, not `GH_TOKEN` |
+| `GH_TOKEN` | phantom token — fallback used by curl examples and non-`gh` clients |
 | `OLLAMA_HOST` | `https://gw.example.com/ollama` |
 
 `--codex` additionally writes `~/.codex/config.toml` (Codex reads its own config, not `OPENAI_BASE_URL`):
