@@ -1,0 +1,123 @@
+{
+  "routes": {
+    "openai": {
+      "upstream": "https://api.openai.com",
+      "inject_mode": "header",
+      "credential_sources": [
+        {
+          "env": "OPENAI_API_KEY",
+          "inject_header": "Authorization",
+          "format": "Bearer {}"
+        }
+      ]
+    },
+    "anthropic": {
+      "upstream": "https://api.anthropic.com",
+      "inject_mode": "header",
+      "credential_sources": [
+        {
+          "env": "ANTHROPIC_API_KEY",
+          "inject_header": "Authorization",
+          "format": "Bearer {}",
+          "prefix": "sk-ant-oat"
+        },
+        {
+          "env": "ANTHROPIC_API_KEY",
+          "inject_header": "x-api-key",
+          "format": "{}"
+        }
+      ]
+    },
+    "github": {
+      "upstream": "https://api.github.com",
+      "inject_mode": "header",
+      "credential_sources": [
+        {
+          "env": "GITHUB_TOKEN",
+          "inject_header": "Authorization",
+          "format": "Bearer {}"
+        }
+      ]
+    },
+    "api": {
+      "canonical": "github",
+      "upstream": "https://api.github.com",
+      "inject_mode": "header",
+      "strip_prefix": "/v3",
+      "credential_sources": [
+        {
+          "env": "GITHUB_TOKEN",
+          "inject_header": "Authorization",
+          "format": "Bearer {}"
+        }
+      ]
+    },
+    "httpbin": {
+      "upstream": "https://httpbin.org",
+      "inject_mode": "header",
+      "credential_sources": [
+        {
+          "env": "HTTPBIN_TOKEN",
+          "inject_header": "Authorization",
+          "format": "Bearer {}"
+        }
+      ]
+    },
+    "ollama": {
+      "upstream": "https://127.0.0.1:11434",
+      "inject_mode": "header",
+      "credential_sources": [
+        {
+          "env": "OLLAMA_API_KEY",
+          "inject_header": "Authorization",
+          "format": "Bearer {}"
+        }
+      ]
+    },
+    "telegram": {
+      "upstream": "https://api.telegram.org",
+      "inject_mode": "url_path",
+      "url_path_prefix": "/bot",
+      "credential_sources": [
+        {
+          "env": "TELEGRAM_BOT_TOKEN",
+          "inject_header": "X-Unused",
+          "format": "{}"
+        }
+      ]
+    },
+    "groq": {
+      "upstream": "https://api.groq.com",
+      "inject_mode": "header",
+      "credential_sources": [
+        {
+          "env": "GROQ_API_KEY",
+          "inject_header": "Authorization",
+          "format": "Bearer {}"
+        }
+      ]
+    },
+    "together": {
+      "upstream": "https://api.together.xyz",
+      "inject_mode": "header",
+      "credential_sources": [
+        {
+          "env": "TOGETHER_API_KEY",
+          "inject_header": "Authorization",
+          "format": "Bearer {}"
+        }
+      ]
+    },
+    "elevenlabs": {
+      "upstream": "https://api.elevenlabs.io",
+      "inject_mode": "header",
+      "credential_sources": [
+        {
+          "env": "ELEVENLABS_API_KEY",
+          "inject_header": "xi-api-key",
+          "format": "{}"
+        }
+      ]
+    }
+  }
+}

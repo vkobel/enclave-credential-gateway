@@ -19,12 +19,24 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn path() -> PathBuf {
+    pub fn config_dir() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".config")
             .join("coco")
+    }
+
+    pub fn path() -> PathBuf {
+        Self::config_dir()
             .join("config.toml")
+    }
+
+    pub fn tools_path() -> PathBuf {
+        Self::config_dir().join("tools.toml")
+    }
+
+    pub fn generated_dir() -> PathBuf {
+        Self::config_dir().join("generated")
     }
 
     pub fn load() -> Result<Config> {

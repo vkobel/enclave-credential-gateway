@@ -54,6 +54,7 @@ mod auth_tests {
 
 /// Profile loading and schema tests
 mod profile_tests {
+    use coco_gateway::profile::load_embedded_routes;
     use coco_gateway::{InjectMode, ProfileRoute, RouteEntry};
 
     #[test]
@@ -176,6 +177,31 @@ mod profile_tests {
         let route: ProfileRoute = serde_json::from_str(json).unwrap();
         let entry = RouteEntry::from_profile("api", route);
         assert_eq!(entry.strip_prefix.as_deref(), Some("/v3"));
+    }
+
+    #[test]
+    fn test_canonical_route_carried_through() {
+        let json = r#"{
+            "canonical": "github",
+            "upstream": "https://api.github.com",
+            "strip_prefix": "/v3",
+            "credential_sources": [{"env": "GITHUB_TOKEN", "inject_header": "Authorization", "format": "Bearer {}"}]
+        }"#;
+        let route: ProfileRoute = serde_json::from_str(json).unwrap();
+        let entry = RouteEntry::from_profile("api", route);
+        assert_eq!(entry.canonical_route, "github");
+        assert_eq!(entry.strip_prefix.as_deref(), Some("/v3"));
+    }
+
+    #[test]
+    fn test_embedded_routes_include_github_compat_route() {
+        let routes = load_embedded_routes();
+        let github = routes.iter().find(|(key, _)| key == "github").unwrap();
+        let api = routes.iter().find(|(key, _)| key == "api").unwrap();
+
+        assert_eq!(github.1.canonical_route, "github");
+        assert_eq!(api.1.canonical_route, "github");
+        assert_eq!(api.1.strip_prefix.as_deref(), Some("/v3"));
     }
 }
 

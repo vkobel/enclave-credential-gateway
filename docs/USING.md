@@ -45,7 +45,7 @@ curl -s -X POST https://gw.example.com/admin/tokens \
 laptop = "ccgw_..."
 ```
 
-> Route key reference: `github`, `anthropic`, `openai`, `httpbin`, `ollama`, `telegram`. The `github` route also accepts `gh` CLI requests — `gh` appends `/api/v3/` to `GH_HOST`, and the route has a built-in alias that maps that prefix transparently.
+> Built-in route reference: `github`, `api`, `anthropic`, `openai`, `httpbin`, `ollama`, `telegram`, `groq`, `together`, `elevenlabs`. The built-in routes live in the embedded `profiles/routes.json` manifest. The `api` route is the GitHub CLI compatibility route and scopes as `github`.
 
 ---
 
@@ -55,19 +55,31 @@ laptop = "ccgw_..."
 eval $(coco env laptop)
 ```
 
-This sets all env vars for every supported tool in one shot. Add `--codex` to also configure Codex CLI:
+This sets the generic shell env vars in one shot:
 
 ```bash
-eval $(coco env laptop --codex)
+eval $(coco env laptop)
 ```
 
-After this, proceed directly to any tool section below — no per-tool configuration needed.
+For file-backed tools, use the dedicated tool adapters:
+
+```bash
+coco tool install codex laptop
+eval $(coco tool env gh laptop)
+eval $(coco tool env opencode laptop)
+```
 
 ---
 
-## Claude Code
+## Claude Code (Experimental)
 
-### With coco (recommended)
+### Render an experimental shell fragment
+
+```bash
+coco tool render claude-code laptop
+```
+
+### Generic shell env
 
 ```bash
 eval $(coco env laptop)
@@ -95,7 +107,7 @@ For Anthropic OAuth tokens (`sk-ant-oat...`) the gateway injects `Authorization:
 ### With coco (recommended)
 
 ```bash
-eval $(coco env laptop --codex)   # --codex writes ~/.codex/config.toml
+coco tool install codex laptop
 codex
 ```
 
@@ -107,7 +119,7 @@ export OPENAI_API_KEY=ccgw_...
 codex
 ```
 
-Codex CLI requires its own config file (`~/.codex/config.toml`) in addition to env vars. The `--codex` flag handles this automatically.
+Codex CLI requires its own config file (`~/.codex/config.toml`) in addition to env vars. `coco tool install codex <token>` writes it directly. `coco env --codex` is still accepted as a compatibility alias.
 
 ### Python SDK
 
@@ -131,7 +143,7 @@ response = client.chat.completions.create(
 ### With coco (recommended)
 
 ```bash
-eval $(coco env laptop)
+eval $(coco tool env gh laptop)
 gh repo list
 ```
 
@@ -144,7 +156,7 @@ export GH_TOKEN=$GH_ENTERPRISE_TOKEN   # optional alias for curl/examples
 gh repo list
 ```
 
-`GH_HOST` tells `gh` to route all API requests through the gateway instead of directly to `api.github.com`. `gh` appends `/api/v3/` to any custom host; the `github` route has a built-in alias for that prefix and strips it before forwarding to `api.github.com` with the real `GITHUB_TOKEN`.
+`GH_HOST` tells `gh` to route all API requests through the gateway instead of directly to `api.github.com`. `gh` appends `/api/v3/` to any custom host; the built-in `api` compatibility route strips `/v3` before forwarding to `api.github.com` with the real `GITHUB_TOKEN`.
 
 > **Note:** `GH_HOST` is a hostname, not a full URL. `gh` treats any `GH_HOST` other than `github.com` as a GitHub Enterprise host and reads `GH_ENTERPRISE_TOKEN` (not `GH_TOKEN`). `coco env` exports both so `gh` works for the gateway host and `GH_TOKEN` stays available for curl/manual examples.
 
@@ -167,6 +179,19 @@ ollama run llama3.2
 ```
 
 Requires `OLLAMA_HOST` to be set to the gateway's `/ollama` prefix. The `ollama.json` profile forwards requests to the upstream Ollama server configured via `OLLAMA_HOST` on the gateway side.
+
+---
+
+## OpenCode
+
+### With coco (recommended)
+
+```bash
+eval $(coco tool env opencode laptop)
+opencode
+```
+
+`coco tool env opencode <token>` materializes an OpenCode config under `~/.config/coco/generated/` and exports `OPENCODE_CONFIG` plus the in-scope API key env vars needed by that generated config.
 
 ---
 

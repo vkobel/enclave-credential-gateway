@@ -83,12 +83,10 @@ pub async fn auth_middleware(
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let prefix = path.trim_start_matches('/').split('/').next().unwrap_or("");
-    let canonical = state.resolve_route_key(prefix);
+    let canonical = state.canonical_route_key(prefix);
     let sources: &[CredentialSource] = state
-        .routes
-        .iter()
-        .find(|(p, _)| p == canonical)
-        .map(|(_, entry)| entry.credential_sources.as_slice())
+        .route_entry(prefix)
+        .map(|entry| entry.credential_sources.as_slice())
         .unwrap_or(&[]);
 
     // 1. Try registry tokens first

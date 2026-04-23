@@ -1,8 +1,12 @@
 //! Profile loading and route definitions.
 
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 use tracing::warn;
+
+const EMBEDDED_PROFILE_PATH: &str = "profiles/routes.json";
+const EMBEDDED_PROFILE_JSON: &str = include_str!("../../../profiles/routes.json");
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CredentialSource {
@@ -38,6 +42,8 @@ pub(crate) struct Profile {
 
 #[derive(Debug, Deserialize)]
 pub struct ProfileRoute {
+    #[serde(default)]
+    pub canonical: Option<String>,
     pub upstream: String,
     #[serde(default)]
     pub credential_env: Option<String>,
@@ -61,14 +67,15 @@ pub struct ProfileRoute {
     pub alias: Option<String>,
 }
 
+#[derive(Debug, Clone)]
 pub struct RouteEntry {
+    pub canonical_route: String,
     pub upstream: String,
     pub credential_sources: Vec<CredentialSource>,
     pub strip_prefix: Option<String>,
     pub inject_mode: InjectMode,
     pub url_path_prefix: Option<String>,
     pub inject_param: Option<String>,
-    pub alias: Option<String>,
 }
 
 impl RouteEntry {
@@ -92,131 +99,73 @@ impl RouteEntry {
             vec![]
         };
         RouteEntry {
+            canonical_route: route.canonical.unwrap_or_else(|| prefix.to_string()),
             upstream: route.upstream,
             credential_sources: sources,
             strip_prefix: route.strip_prefix,
             inject_mode: route.inject_mode,
             url_path_prefix: route.url_path_prefix,
             inject_param: route.inject_param,
-            alias: route.alias,
         }
     }
 }
 
 pub fn load_profile() -> (Vec<(String, RouteEntry)>, Option<String>) {
-    let path = std::env::var("COCO_PROFILE")
-        .ok()
-        .unwrap_or_else(|| "/etc/coco/profile.json".to_string());
+    if let Ok(path) = std::env::var("COCO_PROFILE") {
+        let routes = load_profile_from_path(&path);
+        return (routes, Some(path));
+    }
 
-    let contents = match std::fs::read_to_string(&path) {
+    let legacy_path = "/etc/coco/profile.json";
+    if Path::new(legacy_path).exists() {
+        let routes = load_profile_from_path(legacy_path);
+        return (routes, Some(legacy_path.to_string()));
+    }
+
+    (
+        load_embedded_routes(),
+        Some(format!("embedded manifest {}", EMBEDDED_PROFILE_PATH)),
+    )
+}
+
+pub fn load_embedded_routes() -> Vec<(String, RouteEntry)> {
+    load_routes_from_str(EMBEDDED_PROFILE_PATH, EMBEDDED_PROFILE_JSON)
+}
+
+fn load_profile_from_path(path: &str) -> Vec<(String, RouteEntry)> {
+    let contents = match std::fs::read_to_string(path) {
         Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return (builtin_routes(), None);
-        }
         Err(e) => {
             tracing::error!("Failed to read profile at {}: {}", path, e);
             std::process::exit(1);
         }
     };
 
-    let profile: Profile = match serde_json::from_str(&contents) {
+    load_routes_from_str(path, &contents)
+}
+
+fn load_routes_from_str(source: &str, contents: &str) -> Vec<(String, RouteEntry)> {
+    let profile: Profile = match serde_json::from_str(contents) {
         Ok(p) => p,
         Err(e) => {
-            tracing::error!("Failed to parse profile at {}: {}", path, e);
+            tracing::error!("Failed to parse profile at {}: {}", source, e);
             std::process::exit(1);
         }
     };
 
-    let routes = profile
-        .routes
-        .into_iter()
-        .map(|(prefix, r)| {
-            let key = prefix.trim_matches('/').to_string();
-            let entry = RouteEntry::from_profile(&key, r);
-            (key, entry)
-        })
-        .collect();
+    let mut routes = BTreeMap::new();
+    for (prefix, route) in profile.routes {
+        let key = prefix.trim_matches('/').to_string();
+        let alias = route.alias.clone().map(|a| a.trim_matches('/').to_string());
+        let entry = RouteEntry::from_profile(&key, route);
+        routes.insert(key.clone(), entry.clone());
 
-    (routes, Some(path))
-}
+        if let Some(alias_key) = alias {
+            if !alias_key.is_empty() && alias_key != key {
+                routes.entry(alias_key).or_insert(entry.clone());
+            }
+        }
+    }
 
-fn builtin_routes() -> Vec<(String, RouteEntry)> {
-    vec![
-        (
-            "openai".to_string(),
-            RouteEntry {
-                upstream: "https://api.openai.com".to_string(),
-                credential_sources: vec![CredentialSource {
-                    env: "OPENAI_API_KEY".to_string(),
-                    inject_header: "Authorization".to_string(),
-                    format: "Bearer {}".to_string(),
-                    prefix: None,
-                }],
-                strip_prefix: None,
-                inject_mode: InjectMode::Header,
-                url_path_prefix: None,
-                inject_param: None,
-                alias: None,
-            },
-        ),
-        (
-            "anthropic".to_string(),
-            RouteEntry {
-                upstream: "https://api.anthropic.com".to_string(),
-                credential_sources: vec![
-                    CredentialSource {
-                        env: "ANTHROPIC_API_KEY".to_string(),
-                        inject_header: "Authorization".to_string(),
-                        format: "Bearer {}".to_string(),
-                        prefix: Some("sk-ant-oat".to_string()),
-                    },
-                    CredentialSource {
-                        env: "ANTHROPIC_API_KEY".to_string(),
-                        inject_header: "x-api-key".to_string(),
-                        format: "{}".to_string(),
-                        prefix: None,
-                    },
-                ],
-                strip_prefix: None,
-                inject_mode: InjectMode::Header,
-                url_path_prefix: None,
-                inject_param: None,
-                alias: None,
-            },
-        ),
-        (
-            "github".to_string(),
-            RouteEntry {
-                upstream: "https://api.github.com".to_string(),
-                credential_sources: vec![CredentialSource {
-                    env: "GITHUB_TOKEN".to_string(),
-                    inject_header: "Authorization".to_string(),
-                    format: "Bearer {}".to_string(),
-                    prefix: None,
-                }],
-                strip_prefix: Some("/api/v3".to_string()),
-                inject_mode: InjectMode::Header,
-                url_path_prefix: None,
-                inject_param: None,
-                alias: Some("api".to_string()),
-            },
-        ),
-        (
-            "httpbin".to_string(),
-            RouteEntry {
-                upstream: "https://httpbin.org".to_string(),
-                credential_sources: vec![CredentialSource {
-                    env: "HTTPBIN_TOKEN".to_string(),
-                    inject_header: "Authorization".to_string(),
-                    format: "Bearer {}".to_string(),
-                    prefix: None,
-                }],
-                strip_prefix: None,
-                inject_mode: InjectMode::Header,
-                url_path_prefix: None,
-                inject_param: None,
-                alias: None,
-            },
-        ),
-    ]
+    routes.into_iter().collect()
 }

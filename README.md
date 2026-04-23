@@ -37,7 +37,7 @@ admin_token = "<your COCO_ADMIN_TOKEN>"
 
 **4. Mint a phantom token:**
 
-Scope values are the route keys defined in the profile. The `github` route has an `alias: "api"` baked in so that `gh` CLI requests (which hit `/api/v3/...` via `GH_HOST`) are transparently routed there.
+Scope values are the built-in route keys from the embedded manifest in `profiles/routes.json`. GitHub compatibility for `gh` is handled by a built-in `/api/v3/...` route that scopes as `github`.
 
 ```bash
 coco token create --name laptop --scope github,httpbin
@@ -152,7 +152,7 @@ coco token revoke laptop
 
 ### Shell activation
 
-`coco env <name>` emits `export` statements for every tool the gateway supports:
+`coco env <name>` emits the generic shell exports:
 
 ```bash
 eval $(coco env laptop)
@@ -171,30 +171,53 @@ This sets:
 | `GH_TOKEN` | phantom token — fallback used by curl examples and non-`gh` clients |
 | `OLLAMA_HOST` | `https://gw.example.com/ollama` |
 
-`--codex` additionally writes `~/.codex/config.toml` (Codex reads its own config, not `OPENAI_BASE_URL`):
+`--codex` is still supported as a compatibility alias, but the preferred workflow is now `coco tool install codex <name>`:
 
 ```bash
 eval $(coco env laptop --codex)
+coco tool install codex laptop
 ```
 
 ---
 
-## Profile Library
+## Tool Adapters
 
-Eight named service profiles ship in `profiles/`. The deploy-time `profile.json` composes whichever you need.
+Tool-specific setup is now handled through built-in adapters, with an optional user override file at `~/.config/coco/tools.toml`.
 
-| File | Upstream | inject_mode | Notes |
+Examples:
+
+```bash
+# Generic shell exports
+eval $(coco env laptop)
+
+# GitHub CLI
+eval $(coco tool env gh laptop)
+
+# Codex CLI config file
+coco tool install codex laptop
+
+# OpenCode config + env
+eval $(coco tool env opencode laptop)
+```
+
+---
+
+## Built-in Routes
+
+The gateway's built-in route set lives in one checked-in manifest: `profiles/routes.json`. The binary embeds that manifest at build time.
+
+| Route | Upstream | inject_mode | Notes |
 |---|---|---|---|
-| `anthropic.json` | api.anthropic.com | header | `x-api-key` or `Authorization: Bearer` (OAuth token detection) |
-| `openai.json` | api.openai.com | header | `Authorization: Bearer` |
-| `github.json` | api.github.com | header | `Authorization: Bearer`; `api` route strips `/v3` prefix for `GH_HOST` |
-| `groq.json` | api.groq.com | header | OpenAI-compatible |
-| `elevenlabs.json` | api.elevenlabs.io | header | `xi-api-key` header |
-| `ollama.json` | configurable | header | `OLLAMA_HOST=https://gw.example.com/ollama` |
-| `telegram.json` | api.telegram.org | url_path | Token injected into URL: `/bot{credential}/...` |
-| `together.json` | api.together.xyz | header | OpenAI-compatible |
-
-`examples/profile.json` ships with anthropic + openai + github + httpbin as the starter set.
+| `anthropic` | api.anthropic.com | header | `x-api-key` or `Authorization: Bearer` (OAuth token detection) |
+| `openai` | api.openai.com | header | `Authorization: Bearer` |
+| `github` | api.github.com | header | canonical GitHub route |
+| `api` | api.github.com | header | GitHub CLI compatibility route; strips `/v3` and scopes as `github` |
+| `groq` | api.groq.com | header | OpenAI-compatible |
+| `elevenlabs` | api.elevenlabs.io | header | `xi-api-key` header |
+| `httpbin` | httpbin.org | header | echo/smoke-test helper |
+| `ollama` | 127.0.0.1:11434 | header | `OLLAMA_HOST=https://gw.example.com/ollama` |
+| `telegram` | api.telegram.org | url_path | Token injected into URL: `/bot{credential}/...` |
+| `together` | api.together.xyz | header | OpenAI-compatible |
 
 ---
 
@@ -248,7 +271,7 @@ Response codes:
 
 ## Custom Profiles
 
-Routes are defined in `examples/profile.json` (or a custom path via `COCO_PROFILE`).
+Built-in routes come from the embedded `profiles/routes.json` manifest. To override them for a custom deployment, point `COCO_PROFILE` at a replacement profile file.
 
 **Single-source route:**
 
