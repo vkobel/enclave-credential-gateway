@@ -75,14 +75,6 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
                 entry.upstream, pfx, credential, upstream_path, query
             )
         }
-        InjectMode::QueryParam => {
-            let param = entry.inject_param.as_deref().unwrap_or("api_key");
-            let sep = if query.is_empty() { "?" } else { "&" };
-            format!(
-                "{}{}{}{}{}{}",
-                entry.upstream, upstream_path, query, sep, param, credential
-            )
-        }
     };
 
     let upstream_uri: Uri = match upstream_url.parse() {

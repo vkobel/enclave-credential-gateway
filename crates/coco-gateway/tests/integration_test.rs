@@ -122,19 +122,6 @@ mod profile_tests {
     }
 
     #[test]
-    fn test_inject_mode_query_param_deserialization() {
-        let json = r#"{
-            "upstream": "https://example.com",
-            "inject_mode": "query_param",
-            "inject_param": "key",
-            "credential_sources": [{"env": "API_KEY", "inject_header": "X", "format": "{}"}]
-        }"#;
-        let route: ProfileRoute = serde_json::from_str(json).unwrap();
-        assert_eq!(route.inject_mode, InjectMode::QueryParam);
-        assert_eq!(route.inject_param.as_deref(), Some("key"));
-    }
-
-    #[test]
     fn test_inject_mode_carried_through_to_route_entry() {
         let json = r#"{
             "upstream": "https://api.telegram.org",
@@ -149,40 +136,46 @@ mod profile_tests {
     }
 
     #[test]
-    fn test_strip_prefix_carried_through() {
+    fn test_alias_deserialization() {
         let json = r#"{
             "upstream": "https://api.github.com",
-            "strip_prefix": "/v3",
+            "aliases": [{"prefix": "api", "strip_prefix": "/v3"}],
             "credential_sources": [{"env": "GITHUB_TOKEN", "inject_header": "Authorization", "format": "Bearer {}"}]
         }"#;
         let route: ProfileRoute = serde_json::from_str(json).unwrap();
-        let entry = RouteEntry::from_profile("api", route);
-        assert_eq!(entry.strip_prefix.as_deref(), Some("/v3"));
+        assert_eq!(route.aliases.len(), 1);
+        assert_eq!(route.aliases[0].prefix, "api");
+        assert_eq!(route.aliases[0].strip_prefix.as_deref(), Some("/v3"));
     }
 
     #[test]
-    fn test_canonical_route_carried_through() {
-        let json = r#"{
-            "canonical": "github",
-            "upstream": "https://api.github.com",
-            "strip_prefix": "/v3",
-            "credential_sources": [{"env": "GITHUB_TOKEN", "inject_header": "Authorization", "format": "Bearer {}"}]
-        }"#;
-        let route: ProfileRoute = serde_json::from_str(json).unwrap();
-        let entry = RouteEntry::from_profile("api", route);
-        assert_eq!(entry.canonical_route, "github");
-        assert_eq!(entry.strip_prefix.as_deref(), Some("/v3"));
-    }
-
-    #[test]
-    fn test_embedded_routes_include_github_compat_route() {
+    fn test_embedded_routes_expand_github_compat_alias() {
         let routes = load_embedded_routes();
         let github = routes.iter().find(|(key, _)| key == "github").unwrap();
         let api = routes.iter().find(|(key, _)| key == "api").unwrap();
 
         assert_eq!(github.1.canonical_route, "github");
+        assert_eq!(github.1.strip_prefix.as_deref(), None);
         assert_eq!(api.1.canonical_route, "github");
+        assert_eq!(api.1.upstream, github.1.upstream);
+        assert_eq!(
+            api.1.credential_sources.len(),
+            github.1.credential_sources.len()
+        );
         assert_eq!(api.1.strip_prefix.as_deref(), Some("/v3"));
+    }
+
+    #[test]
+    fn test_embedded_manifest_has_no_top_level_api_route() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../../../profiles/routes.json")).unwrap();
+        let routes = manifest["routes"].as_object().unwrap();
+        assert!(routes.contains_key("github"));
+        assert!(!routes.contains_key("api"));
+
+        let aliases = routes["github"]["aliases"].as_array().unwrap();
+        assert_eq!(aliases[0]["prefix"], "api");
+        assert_eq!(aliases[0]["strip_prefix"], "/v3");
     }
 
     #[test]
@@ -357,36 +350,6 @@ mod header_tests {
             url,
             "https://api.telegram.org/bot123456:ABC-DEF/sendMessage"
         );
-    }
-
-    #[test]
-    fn test_query_param_mode_construction() {
-        let upstream = "https://example.com";
-        let upstream_path = "/api/data";
-        let query = "";
-        let inject_param = "api_key";
-        let credential = "my-key";
-        let sep = "?";
-        let url = format!(
-            "{}{}{}{}{}{}",
-            upstream, upstream_path, query, sep, inject_param, credential
-        );
-        assert_eq!(url, "https://example.com/api/data?api_keymy-key");
-    }
-
-    #[test]
-    fn test_query_param_mode_with_existing_query() {
-        let upstream = "https://example.com";
-        let upstream_path = "/api/data";
-        let query = "?foo=bar";
-        let inject_param = "api_key";
-        let credential = "my-key";
-        let sep = "&";
-        let url = format!(
-            "{}{}{}{}{}{}",
-            upstream, upstream_path, query, sep, inject_param, credential
-        );
-        assert_eq!(url, "https://example.com/api/data?foo=bar&api_keymy-key");
     }
 
     #[test]

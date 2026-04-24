@@ -27,7 +27,6 @@ pub enum InjectMode {
     #[default]
     Header,
     UrlPath,
-    QueryParam,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,19 +36,22 @@ pub(crate) struct Profile {
 
 #[derive(Debug, Deserialize)]
 pub struct ProfileRoute {
-    #[serde(default)]
-    pub canonical: Option<String>,
     pub upstream: String,
     #[serde(default)]
     pub credential_sources: Vec<CredentialSource>,
     #[serde(default)]
-    pub strip_prefix: Option<String>,
+    pub aliases: Vec<RouteAlias>,
     #[serde(default)]
     pub inject_mode: InjectMode,
     #[serde(default)]
     pub url_path_prefix: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RouteAlias {
+    pub prefix: String,
     #[serde(default)]
-    pub inject_param: Option<String>,
+    pub strip_prefix: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,7 +62,6 @@ pub struct RouteEntry {
     pub strip_prefix: Option<String>,
     pub inject_mode: InjectMode,
     pub url_path_prefix: Option<String>,
-    pub inject_param: Option<String>,
 }
 
 impl RouteEntry {
@@ -72,13 +73,23 @@ impl RouteEntry {
             );
         }
         RouteEntry {
-            canonical_route: route.canonical.unwrap_or_else(|| prefix.to_string()),
+            canonical_route: prefix.to_string(),
             upstream: route.upstream,
             credential_sources: route.credential_sources,
-            strip_prefix: route.strip_prefix,
+            strip_prefix: None,
             inject_mode: route.inject_mode,
             url_path_prefix: route.url_path_prefix,
-            inject_param: route.inject_param,
+        }
+    }
+
+    fn from_alias(canonical_route: &str, route: &RouteEntry, alias: RouteAlias) -> Self {
+        RouteEntry {
+            canonical_route: canonical_route.to_string(),
+            upstream: route.upstream.clone(),
+            credential_sources: route.credential_sources.clone(),
+            strip_prefix: alias.strip_prefix,
+            inject_mode: route.inject_mode.clone(),
+            url_path_prefix: route.url_path_prefix.clone(),
         }
     }
 }
@@ -113,8 +124,14 @@ pub fn try_load_routes_from_str(
     let mut routes = BTreeMap::new();
     for (prefix, route) in profile.routes {
         let key = normalize_route_key(&prefix);
+        let aliases = route.aliases.clone();
         let entry = RouteEntry::from_profile(&key, route);
-        routes.insert(key.clone(), entry.clone());
+        insert_route(&mut routes, key.clone(), entry.clone())?;
+        for alias in aliases {
+            let alias_key = normalize_route_key(&alias.prefix);
+            let alias_entry = RouteEntry::from_alias(&key, &entry, alias);
+            insert_route(&mut routes, alias_key, alias_entry)?;
+        }
     }
 
     Ok(routes.into_iter().collect())
@@ -122,4 +139,18 @@ pub fn try_load_routes_from_str(
 
 fn normalize_route_key(key: &str) -> String {
     key.trim_matches('/').to_string()
+}
+
+fn insert_route(
+    routes: &mut BTreeMap<String, RouteEntry>,
+    key: String,
+    entry: RouteEntry,
+) -> Result<(), String> {
+    if routes.insert(key.clone(), entry).is_some() {
+        return Err(format!(
+            "Profile route or alias normalizes to duplicate key '{}'",
+            key
+        ));
+    }
+    Ok(())
 }

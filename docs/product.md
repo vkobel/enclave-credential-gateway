@@ -169,7 +169,7 @@ minutes**, end to end:
 - ✅ Constant-time phantom validation, multi-source credential injection (`coco-gateway`).
 - ✅ Named token registry (blake3 hashed, atomic persistence). Admin API: `POST/GET/DELETE /admin/tokens`.
 - ✅ Scope enforcement: per-token route allowlist, 403 before credential resolution.
-- ✅ Route profile schema: `inject_mode` ∈ {`header`, `url_path`, `query_param`}, `strip_prefix`, prefix-based `credential_sources`.
+- ✅ Route profile schema: `inject_mode` ∈ {`header`, `url_path`}, route-owned `aliases`, and prefix-based `credential_sources`.
 - ✅ Curated profiles: **OpenAI, Anthropic, GitHub, Groq, ElevenLabs, Ollama, Telegram, Together**.
 - ✅ Caddy TLS termination. `GET /health` endpoint.
 - ✅ `coco` CLI: `env` (shell activation), `token {create|revoke|ls}`.
@@ -274,7 +274,7 @@ Anchored on what's actually in the repo today.
 Named token registry with admin API (`POST/GET/DELETE /admin/tokens`),
 scope enforcement, blake3 hashing at rest. Profile library for 8 services
 (OpenAI, Anthropic, GitHub, Groq, ElevenLabs, Ollama, Telegram, Together).
-Inject modes: header, url_path (Telegram), query_param. Caddy TLS. Local
+Inject modes: header and url_path (Telegram). Caddy TLS. Local
 `coco` CLI with `env` (shell activation for Claude Code, Codex, gh, Ollama)
 and `token {create|ls|revoke}` subcommands. Backwards-compatible with
 single `COCO_PHANTOM_TOKEN` env var.

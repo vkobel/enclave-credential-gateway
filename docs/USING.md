@@ -45,7 +45,7 @@ curl -s -X POST https://gw.example.com/admin/tokens \
 laptop = "ccgw_..."
 ```
 
-> Built-in route reference: `github`, `api`, `anthropic`, `openai`, `httpbin`, `ollama`, `telegram`, `groq`, `together`, `elevenlabs`. The built-in routes live in the embedded `profiles/routes.json` manifest. The `api` route is the GitHub CLI compatibility route and scopes as `github`.
+> Built-in route reference: `github`, `anthropic`, `openai`, `httpbin`, `ollama`, `telegram`, `groq`, `together`, `elevenlabs`. The built-in routes live in the embedded `profiles/routes.json` manifest. GitHub owns an `api` compatibility alias for `gh`; `/api/v3/...` scopes as `github`.
 
 ---
 
@@ -156,7 +156,7 @@ export GH_TOKEN=$GH_ENTERPRISE_TOKEN   # optional alias for curl/examples
 gh repo list
 ```
 
-`GH_HOST` tells `gh` to route all API requests through the gateway instead of directly to `api.github.com`. `gh` appends `/api/v3/` to any custom host; the built-in `api` compatibility route strips `/v3` before forwarding to `api.github.com` with the real `GITHUB_TOKEN`.
+`GH_HOST` tells `gh` to route all API requests through the gateway instead of directly to `api.github.com`. `gh` appends `/api/v3/` to any custom host; GitHub's built-in `api` compatibility alias strips `/v3` before forwarding to `api.github.com` with the real `GITHUB_TOKEN`.
 
 > **Note:** `GH_HOST` is a hostname, not a full URL. `gh` treats any `GH_HOST` other than `github.com` as a GitHub Enterprise host and reads `GH_ENTERPRISE_TOKEN` (not `GH_TOKEN`). `coco env` exports both so `gh` works for the gateway host and `GH_TOKEN` stays available for curl/manual examples.
 

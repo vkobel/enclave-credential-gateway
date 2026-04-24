@@ -136,25 +136,24 @@ Goal: a remotely deployable gateway that any agent or tool can connect to, with 
 ### 1c-A. Remote deploy infrastructure
 
 - [x] 1c.1 — Add `GET /health` unauthenticated endpoint returning `200 OK {"status":"ok"}`.
-- [x] 1c.2 — Add `strip_prefix` field to route config (optional string). When set, strip that prefix from the route-relative path before forwarding. Needed for `GH_HOST` support: GitHub Enterprise clients route to `/api/v3/...`; after the `api` route key is removed, stripping route-relative `/v3` before forwarding to `api.github.com` makes it transparent.
-  - ⚠️ Known limitation: the path-prefix compatibility route (`"api"` scoped as `github`) conflicts with any other registered route that also uses `/api/` as its base path. CLI tools like `gh` cannot include a path in `GH_HOST`, so they always hit the root of a hostname — path-prefix routing is inherently fragile for them. See post-v1: **Host-based routing**.
+- [x] 1c.2 — Add alias `strip_prefix` support. Needed for `GH_HOST`: GitHub Enterprise clients route to `/api/v3/...`; the `github` route owns an `api` compatibility alias that strips route-relative `/v3` before forwarding to `api.github.com`.
+  - ⚠️ Known limitation: the path-prefix compatibility alias (`"api"` scoped as `github`) conflicts with any other registered route that also uses `/api/` as its base path. CLI tools like `gh` cannot include a path in `GH_HOST`, so they always hit the root of a hostname — path-prefix routing is inherently fragile for them. See post-v1: **Host-based routing**.
 - [x] 1c.3 — Add Caddy service to `docker-compose.yml` for automatic TLS termination (Let's Encrypt). Caddy proxies `443 → 8080`. Gateway itself stays HTTP-only behind it.
 
 ### 1c-B. Built-in route manifest
 
 - [x] 1c.4 — Define the extended route schema fields needed by new profiles:
-  - `strip_prefix: Option<String>` — path prefix to strip before forwarding (existing 1c.2)
-  - `inject_mode: "header" | "url_path" | "query_param"` — where to inject the credential (default: `"header"`)  
-    - `url_path`: replaces a `{credential}` placeholder in the upstream path template (needed for Telegram: `/bot{credential}/...`)
-    - `query_param`: appends credential as a query parameter with a configured key name
-  - `inject_param: Option<String>` — query param name when `inject_mode = "query_param"`
+  - `aliases: [{ prefix, strip_prefix? }]` — compatibility prefixes owned by the top-level route
+  - `inject_mode: "header" | "url_path"` — where to inject the credential (default: `"header"`)
+    - `url_path`: inserts the credential into the upstream path (needed for Telegram: `/bot{credential}/...`)
+  - `url_path_prefix: Option<String>` — path prefix placed before the credential when `inject_mode = "url_path"`
 - [x] 1c.5 — Ship the following routes in the single embedded `profiles/routes.json` manifest:
 
   | Route | Upstream | inject_mode | Notes |
   |---|---|---|---|
   | `anthropic` | api.anthropic.com | header | x-api-key or Bearer (existing multi-source) |
   | `openai` | api.openai.com | header | Authorization: Bearer |
-  | `github` / `api` | api.github.com | header | Authorization: Bearer + route-relative strip_prefix /v3 |
+  | `github` | api.github.com | header | Authorization: Bearer + `api` alias with route-relative strip_prefix /v3 |
   | `groq` | api.groq.com | header | OpenAI-compatible, Authorization: Bearer |
   | `elevenlabs` | api.elevenlabs.io | header | xi-api-key header |
   | `ollama` | configurable upstream | header | Authorization: Bearer; OLLAMA_HOST=https://gw.example.com/ollama |

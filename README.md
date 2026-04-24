@@ -43,7 +43,7 @@ For remote TLS, set `COCO_DOMAIN=gw.example.com` before `docker compose up -d --
 
 The built-in routes are defined in [profiles/routes.json](./profiles/routes.json). That file is embedded into the gateway binary at build time; runtime route overrides are intentionally not supported yet.
 
-Token scopes use the canonical route key. Empty scope is unrestricted and allows all current and future routes. The `/api/v3/...` GitHub compatibility route is named `api` in paths, but scopes as `github`.
+Token scopes use the top-level route key. Empty scope is unrestricted and allows all current and future routes. GitHub also owns an `/api/v3/...` compatibility alias for `gh`; it scopes as `github` and strips `/v3` before forwarding.
 
 | Path prefix | Scope | Upstream | Credential env | Injection |
 |---|---|---|---|---|
@@ -58,17 +58,44 @@ Token scopes use the canonical route key. Empty scope is unrestricted and allows
 | `/together/...` | `together` | `https://api.together.xyz` | `TOGETHER_API_KEY` | `Authorization: Bearer ...` |
 | `/elevenlabs/...` | `elevenlabs` | `https://api.elevenlabs.io` | `ELEVENLABS_API_KEY` | `xi-api-key` |
 
-Route manifest fields are intentionally small:
+Route manifest syntax is route-first:
+
+```json
+{
+  "routes": {
+    "<route-key>": {
+      "upstream": "https://api.example.com",
+      "aliases": [
+        { "prefix": "<compat-path-prefix>", "strip_prefix": "/optional/path/to/remove" }
+      ],
+      "credential_sources": [
+        {
+          "env": "REAL_VENDOR_TOKEN_ENV",
+          "inject_header": "Authorization",
+          "format": "Bearer {}",
+          "prefix": "optional-token-prefix"
+        }
+      ],
+      "inject_mode": "header"
+    }
+  }
+}
+```
+
+The top-level route key is both the normal URL prefix and the token scope. For example, `github` handles `/github/...` and a token scoped to `github` can call it. Aliases are compatibility path prefixes owned by a top-level route; GitHub's `api` alias means `/api/v3/user` scopes as `github`, strips `/v3`, and forwards `/user` to `https://api.github.com`.
+
+`credential_sources` are tried in order. The first env var that exists and matches its optional `prefix` is selected. In normal `header` mode, the gateway removes the client's phantom token header and injects the real credential into `inject_header` after applying `format`; `{}` is replaced with the env value. Most routes omit `inject_mode` because `header` is the default. `url_path` mode is only for APIs such as Telegram where the token is part of the path: `/telegram/sendMessage` becomes `https://api.telegram.org/bot<TOKEN>/sendMessage`; set `url_path_prefix` only with that mode.
+
+Supported fields:
 
 | Field | Purpose |
 |---|---|
 | `upstream` | Base upstream URL |
 | `credential_sources` | Ordered env-backed credentials with `env`, `inject_header`, optional `format`, and optional `prefix` |
-| `inject_mode` | `header`, `url_path`, or `query_param`; defaults to `header` |
-| `canonical` | Scope key for compatibility routes such as `api` -> `github` |
-| `strip_prefix` | Route-relative path prefix to remove before forwarding |
+| `aliases` | Optional compatibility prefixes owned by this route, such as GitHub's `api` alias |
+| `strip_prefix` | Alias path prefix to remove before forwarding |
+| `inject_mode` | `header` or `url_path`; defaults to `header` |
 | `url_path_prefix` | Prefix used by `url_path` credential injection |
-| `inject_param` | Query parameter name used by `query_param` credential injection |
 
 ## CLI
 
