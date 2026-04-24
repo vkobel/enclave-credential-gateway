@@ -119,7 +119,7 @@ export OPENAI_API_KEY=ccgw_...
 codex
 ```
 
-Codex CLI requires its own config file (`~/.codex/config.toml`) in addition to env vars. `coco tool install codex <token>` writes it directly. `coco env --codex` is still accepted as a compatibility alias.
+Codex CLI requires its own config file (`~/.codex/config.toml`) in addition to env vars. `coco tool install codex <token>` writes it directly. `coco env --codex` is still accepted as a quiet compatibility alias: it writes the Codex config only when the token can access the `openai` route, and otherwise leaves the config untouched.
 
 ### Python SDK
 

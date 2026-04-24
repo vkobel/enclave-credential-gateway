@@ -111,8 +111,8 @@ pub fn install_tool_file(config: &Config, tool: &str, token_name: &str) -> Resul
 }
 
 fn load_registry() -> Result<HashMap<String, ToolAdapter>> {
-    let builtin: ToolRegistryFile = toml::from_str(BUILTIN_ADAPTERS_TOML)
-        .context("Failed to parse built-in tool adapters")?;
+    let builtin: ToolRegistryFile =
+        toml::from_str(BUILTIN_ADAPTERS_TOML).context("Failed to parse built-in tool adapters")?;
     let mut adapters = builtin.adapters;
 
     let user_path = Config::tools_path();
@@ -255,7 +255,7 @@ impl<'a> ToolContext<'a> {
     fn has_route(&self, route: Option<&str>) -> bool {
         match route {
             None => true,
-            Some(route) => self.entry.scope.is_empty() || self.entry.scope.iter().any(|r| r == route),
+            Some(route) => self.entry.allows_route(route),
         }
     }
 }
@@ -276,9 +276,8 @@ enum FilePurpose {
 mod tests {
     use super::{get_tool_adapter, install_tool_file, render_tool_env, render_tool_file};
     use crate::config::{Config, TokenEntry};
+    use crate::test_support::with_temp_home;
     use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
-    use tempfile::TempDir;
 
     fn config_with_scope(scope: &[&str]) -> Config {
         let mut tokens = HashMap::new();
@@ -297,54 +296,44 @@ mod tests {
         }
     }
 
-    fn with_temp_home<T>(f: impl FnOnce(&TempDir) -> T) -> T {
-        static HOME_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let _guard = HOME_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-        let temp = TempDir::new().unwrap();
-        let old_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", temp.path());
-        let result = f(&temp);
-        match old_home {
-            Some(home) => std::env::set_var("HOME", home),
-            None => std::env::remove_var("HOME"),
-        }
-        result
-    }
-
     #[test]
     fn shell_adapter_preserves_existing_exports() {
-        let config = config_with_scope(&["anthropic", "openai", "github", "ollama", "httpbin"]);
-        let exports = render_tool_env(&config, "shell", "laptop").unwrap();
+        with_temp_home(|_temp| {
+            let config = config_with_scope(&["anthropic", "openai", "github", "ollama", "httpbin"]);
+            let exports = render_tool_env(&config, "shell", "laptop").unwrap();
 
-        assert_eq!(
-            exports,
-            vec![
-                "export ANTHROPIC_BASE_URL=https://gw.example.com/anthropic",
-                "export ANTHROPIC_API_KEY=ccgw_test",
-                "export OPENAI_BASE_URL=https://gw.example.com/openai",
-                "export OPENAI_API_KEY=ccgw_test",
-                "export GH_HOST=gw.example.com",
-                "export GH_ENTERPRISE_TOKEN=ccgw_test",
-                "export GH_TOKEN=ccgw_test",
-                "export OLLAMA_HOST=https://gw.example.com/ollama",
-                "export HTTPBIN_TOKEN=ccgw_test",
-            ]
-        );
+            assert_eq!(
+                exports,
+                vec![
+                    "export ANTHROPIC_BASE_URL=https://gw.example.com/anthropic",
+                    "export ANTHROPIC_API_KEY=ccgw_test",
+                    "export OPENAI_BASE_URL=https://gw.example.com/openai",
+                    "export OPENAI_API_KEY=ccgw_test",
+                    "export GH_HOST=gw.example.com",
+                    "export GH_ENTERPRISE_TOKEN=ccgw_test",
+                    "export GH_TOKEN=ccgw_test",
+                    "export OLLAMA_HOST=https://gw.example.com/ollama",
+                    "export HTTPBIN_TOKEN=ccgw_test",
+                ]
+            );
+        });
     }
 
     #[test]
     fn gh_adapter_exports_enterprise_credentials() {
-        let config = config_with_scope(&["github"]);
-        let exports = render_tool_env(&config, "gh", "laptop").unwrap();
+        with_temp_home(|_temp| {
+            let config = config_with_scope(&["github"]);
+            let exports = render_tool_env(&config, "gh", "laptop").unwrap();
 
-        assert_eq!(
-            exports,
-            vec![
-                "export GH_HOST=gw.example.com",
-                "export GH_ENTERPRISE_TOKEN=ccgw_test",
-                "export GH_TOKEN=ccgw_test",
-            ]
-        );
+            assert_eq!(
+                exports,
+                vec![
+                    "export GH_HOST=gw.example.com",
+                    "export GH_ENTERPRISE_TOKEN=ccgw_test",
+                    "export GH_TOKEN=ccgw_test",
+                ]
+            );
+        });
     }
 
     #[test]
@@ -404,12 +393,16 @@ value = "1"
 
     #[test]
     fn experimental_claude_render_is_available() {
-        let config = config_with_scope(&["anthropic"]);
-        let adapter = get_tool_adapter("claude-code").unwrap();
-        assert!(adapter.experimental);
+        with_temp_home(|_temp| {
+            let config = config_with_scope(&["anthropic"]);
+            let adapter = get_tool_adapter("claude-code").unwrap();
+            assert!(adapter.experimental);
 
-        let render = render_tool_file(&config, "claude-code", "laptop").unwrap();
-        assert!(render.contains("export ANTHROPIC_API_KEY=\"ccgw_test\""));
-        assert!(render.contains("export ANTHROPIC_BASE_URL=\"https://gw.example.com/anthropic\""));
+            let render = render_tool_file(&config, "claude-code", "laptop").unwrap();
+            assert!(render.contains("export ANTHROPIC_API_KEY=\"ccgw_test\""));
+            assert!(
+                render.contains("export ANTHROPIC_BASE_URL=\"https://gw.example.com/anthropic\"")
+            );
+        });
     }
 }

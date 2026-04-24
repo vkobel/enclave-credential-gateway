@@ -3,6 +3,8 @@ use clap::{Parser, Subcommand};
 mod client;
 mod commands;
 mod config;
+#[cfg(test)]
+mod test_support;
 mod tooling;
 
 #[derive(Parser)]

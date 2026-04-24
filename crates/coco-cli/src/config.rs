@@ -10,6 +10,12 @@ pub struct TokenEntry {
     pub scope: Vec<String>,
 }
 
+impl TokenEntry {
+    pub fn allows_route(&self, route: &str) -> bool {
+        self.scope.is_empty() || self.scope.iter().any(|scoped_route| scoped_route == route)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
     pub gateway_url: String,
@@ -27,8 +33,7 @@ impl Config {
     }
 
     pub fn path() -> PathBuf {
-        Self::config_dir()
-            .join("config.toml")
+        Self::config_dir().join("config.toml")
     }
 
     pub fn tools_path() -> PathBuf {

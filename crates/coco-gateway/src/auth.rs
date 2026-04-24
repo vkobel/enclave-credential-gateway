@@ -32,7 +32,9 @@ pub fn extract_candidate_tokens(req: &Request<Body>) -> Vec<String> {
                 Some(rest.trim().to_string())
             } else {
                 // `gh` CLI sends `Authorization: token <value>` (GitHub legacy format)
-                lower.strip_prefix("token ").map(|rest| rest.trim().to_string())
+                lower
+                    .strip_prefix("token ")
+                    .map(|rest| rest.trim().to_string())
             };
             if let Some(c) = candidate {
                 if !candidates.contains(&c) {
