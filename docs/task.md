@@ -5,7 +5,7 @@
 | Phase | Description | Status |
 |---|---|---|
 | 1a | Plain proxy — phantom token auth, profile routing, multi-source credential injection | **done** |
-| 1c | Remote deploy, profile library, lightweight token registry, local `coco` CLI | **done** |
+| 1c | Remote deploy, built-in route manifest, lightweight token registry, local `coco` CLI | **done** |
 | 1b | CVM attestation — `GET /attest`, TDX QuoteV4, Phala deploy | **next** |
 | 2 | Full token registry — encrypted store, admin API, policy | not started |
 | 3 | Per-token policy + audit log | not started |
@@ -140,9 +140,7 @@ Goal: a remotely deployable gateway that any agent or tool can connect to, with 
   - ⚠️ Known limitation: the path-prefix + alias approach (`"api" → github`) conflicts with any other registered route that also uses `/api/` as its base path. CLI tools like `gh` cannot include a path in `GH_HOST`, so they always hit the root of a hostname — path-prefix routing is inherently fragile for them. See post-v1: **Host-based routing**.
 - [x] 1c.3 — Add Caddy service to `docker-compose.yml` for automatic TLS termination (Let's Encrypt). Caddy proxies `443 → 8080`. Gateway itself stays HTTP-only behind it.
 
-### 1c-B. Named service profile library
-
-Replace the single `examples/profile.json` with a `profiles/` directory of named per-service files. The deploy-time `profile.json` merges whichever services you want.
+### 1c-B. Built-in route manifest
 
 - [x] 1c.4 — Define the extended route schema fields needed by new profiles:
   - `strip_prefix: Option<String>` — path prefix to strip before forwarding (existing 1c.2)
@@ -150,20 +148,20 @@ Replace the single `examples/profile.json` with a `profiles/` directory of named
     - `url_path`: replaces a `{credential}` placeholder in the upstream path template (needed for Telegram: `/bot{credential}/...`)
     - `query_param`: appends credential as a query parameter with a configured key name
   - `inject_param: Option<String>` — query param name when `inject_mode = "query_param"`
-- [x] 1c.5 — Ship the following named profiles in `profiles/`:
+- [x] 1c.5 — Ship the following routes in the single embedded `profiles/routes.json` manifest:
 
-  | File | Upstream | inject_mode | Notes |
+  | Route | Upstream | inject_mode | Notes |
   |---|---|---|---|
-  | `anthropic.json` | api.anthropic.com | header | x-api-key or Bearer (existing multi-source) |
-  | `openai.json` | api.openai.com | header | Authorization: Bearer |
-  | `github.json` | api.github.com | header | Authorization: Bearer + strip_prefix /api/v3 |
-  | `groq.json` | api.groq.com | header | OpenAI-compatible, Authorization: Bearer |
-  | `elevenlabs.json` | api.elevenlabs.io | header | xi-api-key header |
-  | `ollama.json` | configurable upstream | header | Authorization: Bearer; OLLAMA_HOST=https://gw.example.com/ollama |
-  | `telegram.json` | api.telegram.org | url_path | /bot{credential}/... |
-  | `together.json` | api.together.xyz | header | Authorization: Bearer (OpenAI-compat) |
+  | `anthropic` | api.anthropic.com | header | x-api-key or Bearer (existing multi-source) |
+  | `openai` | api.openai.com | header | Authorization: Bearer |
+  | `github` / `api` | api.github.com | header | Authorization: Bearer + strip_prefix /api/v3 |
+  | `groq` | api.groq.com | header | OpenAI-compatible, Authorization: Bearer |
+  | `elevenlabs` | api.elevenlabs.io | header | xi-api-key header |
+  | `ollama` | configurable upstream | header | Authorization: Bearer; OLLAMA_HOST=https://gw.example.com/ollama |
+  | `telegram` | api.telegram.org | url_path | /bot{credential}/... |
+  | `together` | api.together.xyz | header | Authorization: Bearer (OpenAI-compat) |
 
-- [x] 1c.6 — Update `examples/profile.json` to demonstrate profile composition (include anthropic + openai + github + groq as a starter set).
+- [x] 1c.6 — Keep `examples/profile.json` as a compose-mounted full profile example. Do not maintain per-service profile fragments until a real composition tool exists.
 - [x] 1c.7 — Add profile validation at startup: log a warning (not a fatal error) for any route with `inject_mode = url_path` that has no `{credential}` placeholder in its upstream URL.
 
 ### 1c-C. Lightweight token registry
