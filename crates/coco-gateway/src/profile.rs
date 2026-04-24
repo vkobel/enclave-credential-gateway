@@ -1,7 +1,7 @@
 //! Profile loading and route definitions.
 
 use serde::Deserialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use tracing::warn;
 
@@ -37,7 +37,7 @@ pub enum InjectMode {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct Profile {
-    pub(crate) routes: HashMap<String, ProfileRoute>,
+    pub(crate) routes: BTreeMap<String, ProfileRoute>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,7 +129,8 @@ pub fn load_profile() -> (Vec<(String, RouteEntry)>, Option<String>) {
 }
 
 pub fn load_embedded_routes() -> Vec<(String, RouteEntry)> {
-    load_routes_from_str(EMBEDDED_PROFILE_PATH, EMBEDDED_PROFILE_JSON)
+    try_load_routes_from_str(EMBEDDED_PROFILE_PATH, EMBEDDED_PROFILE_JSON)
+        .expect("embedded profile manifest must be valid")
 }
 
 fn load_profile_from_path(path: &str) -> Vec<(String, RouteEntry)> {
@@ -141,31 +142,63 @@ fn load_profile_from_path(path: &str) -> Vec<(String, RouteEntry)> {
         }
     };
 
-    load_routes_from_str(path, &contents)
-}
-
-fn load_routes_from_str(source: &str, contents: &str) -> Vec<(String, RouteEntry)> {
-    let profile: Profile = match serde_json::from_str(contents) {
-        Ok(p) => p,
+    match try_load_routes_from_str(path, &contents) {
+        Ok(routes) => routes,
         Err(e) => {
-            tracing::error!("Failed to parse profile at {}: {}", source, e);
+            tracing::error!("{}", e);
             std::process::exit(1);
         }
-    };
+    }
+}
+
+pub fn try_load_routes_from_str(
+    source: &str,
+    contents: &str,
+) -> Result<Vec<(String, RouteEntry)>, String> {
+    let profile: Profile = serde_json::from_str(contents)
+        .map_err(|e| format!("Failed to parse profile at {}: {}", source, e))?;
+
+    let mut original_keys = BTreeSet::new();
+    for prefix in profile.routes.keys() {
+        let key = normalize_route_key(prefix);
+        if !original_keys.insert(key.clone()) {
+            return Err(format!(
+                "Profile route '{}' normalizes to duplicate key '{}'",
+                prefix, key
+            ));
+        }
+    }
 
     let mut routes = BTreeMap::new();
+    let mut alias_keys = BTreeSet::new();
     for (prefix, route) in profile.routes {
-        let key = prefix.trim_matches('/').to_string();
-        let alias = route.alias.clone().map(|a| a.trim_matches('/').to_string());
+        let key = normalize_route_key(&prefix);
+        let alias = route.alias.clone().map(|a| normalize_route_key(&a));
         let entry = RouteEntry::from_profile(&key, route);
         routes.insert(key.clone(), entry.clone());
 
         if let Some(alias_key) = alias {
             if !alias_key.is_empty() && alias_key != key {
-                routes.entry(alias_key).or_insert(entry.clone());
+                if original_keys.contains(&alias_key) {
+                    return Err(format!(
+                        "Profile alias '{}' for route '{}' collides with a route key",
+                        alias_key, key
+                    ));
+                }
+                if !alias_keys.insert(alias_key.clone()) {
+                    return Err(format!(
+                        "Profile alias '{}' for route '{}' collides with another alias",
+                        alias_key, key
+                    ));
+                }
+                routes.insert(alias_key, entry.clone());
             }
         }
     }
 
-    routes.into_iter().collect()
+    Ok(routes.into_iter().collect())
+}
+
+fn normalize_route_key(key: &str) -> String {
+    key.trim_matches('/').to_string()
 }

@@ -54,7 +54,7 @@ mod auth_tests {
 
 /// Profile loading and schema tests
 mod profile_tests {
-    use coco_gateway::profile::load_embedded_routes;
+    use coco_gateway::profile::{load_embedded_routes, try_load_routes_from_str};
     use coco_gateway::{InjectMode, ProfileRoute, RouteEntry};
 
     #[test]
@@ -202,6 +202,57 @@ mod profile_tests {
         assert_eq!(github.1.canonical_route, "github");
         assert_eq!(api.1.canonical_route, "github");
         assert_eq!(api.1.strip_prefix.as_deref(), Some("/v3"));
+    }
+
+    #[test]
+    fn test_profile_routes_are_returned_in_deterministic_order() {
+        let routes = try_load_routes_from_str(
+            "test",
+            r#"{
+                "routes": {
+                    "zeta": {"upstream": "https://z.example"},
+                    "alpha": {"upstream": "https://a.example"}
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let keys: Vec<_> = routes.into_iter().map(|(key, _)| key).collect();
+        assert_eq!(keys, vec!["alpha", "zeta"]);
+    }
+
+    #[test]
+    fn test_profile_alias_cannot_collide_with_later_route_key() {
+        let error = try_load_routes_from_str(
+            "test",
+            r#"{
+                "routes": {
+                    "alpha": {"upstream": "https://a.example", "alias": "zeta"},
+                    "zeta": {"upstream": "https://z.example"}
+                }
+            }"#,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("alias 'zeta'"));
+        assert!(error.contains("collides with a route key"));
+    }
+
+    #[test]
+    fn test_profile_alias_cannot_collide_with_prior_alias() {
+        let error = try_load_routes_from_str(
+            "test",
+            r#"{
+                "routes": {
+                    "alpha": {"upstream": "https://a.example", "alias": "shared"},
+                    "zeta": {"upstream": "https://z.example", "alias": "shared"}
+                }
+            }"#,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("alias 'shared'"));
+        assert!(error.contains("collides with another alias"));
     }
 }
 
@@ -466,8 +517,20 @@ mod registry_tests {
 
         let validated = registry.validate(&scoped_token).await.unwrap();
         assert_eq!(validated.scope, vec!["httpbin"]);
-        assert!(!validated.scope.is_empty());
-        assert!(!validated.scope.iter().any(|s| s == "anthropic"));
+        assert!(!validated.is_unrestricted());
+        assert!(validated.allows_route("httpbin"));
+        assert!(!validated.allows_route("anthropic"));
+    }
+
+    #[tokio::test]
+    async fn test_empty_scope_allows_all_routes() {
+        let (registry, _dir) = create_registry().await;
+        let (_record, token) = registry.create_token("all".to_string(), vec![]).await;
+
+        let validated = registry.validate(&token).await.unwrap();
+        assert!(validated.is_unrestricted());
+        assert!(validated.allows_route("httpbin"));
+        assert!(validated.allows_route("future-route"));
     }
 
     #[tokio::test]

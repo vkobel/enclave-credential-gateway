@@ -96,7 +96,7 @@ pub async fn auth_middleware(
         let candidates = extract_candidate_tokens(&req);
         for candidate in candidates {
             if let Some(record) = registry.validate(&candidate).await {
-                if !record.scope.is_empty() && !record.scope.iter().any(|s| s == canonical) {
+                if !record.allows_route(canonical) {
                     warn!(
                         "{} {} — 403 token '{}' not scoped for route '{}'",
                         method, path, record.name, canonical

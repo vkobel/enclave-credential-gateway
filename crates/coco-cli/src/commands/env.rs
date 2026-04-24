@@ -27,12 +27,12 @@ fn should_install_codex(config: &Config, name: &str) -> Result<bool> {
 mod tests {
     use super::run;
     use crate::config::{Config, TokenEntry};
-    use crate::test_support::with_temp_home;
+    use crate::test_support::with_temp_config_root;
     use std::collections::HashMap;
 
     #[test]
     fn codex_flag_is_noop_without_openai_scope() {
-        with_temp_home(|temp| {
+        with_temp_config_root(|temp| {
             let mut tokens = HashMap::new();
             tokens.insert(
                 "laptop".to_string(),

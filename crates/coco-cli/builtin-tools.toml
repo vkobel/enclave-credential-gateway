@@ -86,6 +86,7 @@ default_render_file = "config"
 [[adapters.opencode.files]]
 id = "config"
 managed_path = "opencode.json"
+# OpenCode resolves {env:...} placeholders from the environment at runtime.
 content = '''
 {
   "$schema": "https://opencode.ai/config.json",

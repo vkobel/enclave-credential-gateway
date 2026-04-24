@@ -25,6 +25,16 @@ pub struct TokenRecord {
     pub token_hash: String,
 }
 
+impl TokenRecord {
+    pub fn allows_route(&self, route: &str) -> bool {
+        self.is_unrestricted() || self.scope.iter().any(|scoped_route| scoped_route == route)
+    }
+
+    pub fn is_unrestricted(&self) -> bool {
+        self.scope.is_empty()
+    }
+}
+
 pub struct TokenRegistry {
     tokens: RwLock<Vec<TokenRecord>>,
     file_path: PathBuf,

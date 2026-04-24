@@ -2,7 +2,7 @@ use crate::config::{Config, TokenEntry};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 const BUILTIN_ADAPTERS_TOML: &str = include_str!("../builtin-tools.toml");
 
@@ -47,6 +47,7 @@ pub struct ToolFile {
 }
 
 struct ToolContext<'a> {
+    tool: &'a str,
     token_name: &'a str,
     token_value: &'a str,
     gateway_url: &'a str,
@@ -99,7 +100,7 @@ pub fn install_tool_file(config: &Config, tool: &str, token_name: &str) -> Resul
         .as_ref()
         .ok_or_else(|| anyhow!("Tool '{}' does not define an install path", tool))?;
     let install_path = render_template(install_path, &ctx, &managed_files)?;
-    let install_path = expand_home(&install_path);
+    let install_path = Config::expand_home(&install_path);
     let content = render_template(&file.content, &ctx, &managed_files)?;
 
     if let Some(parent) = install_path.parent() {
@@ -142,7 +143,9 @@ fn materialize_managed_files(
             continue;
         };
 
-        let path = ctx.generated_root.join(relative_path);
+        let path = ctx
+            .generated_root
+            .join(validate_managed_path(relative_path)?);
         let content = render_template(&file.content, ctx, &managed_files)?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -196,18 +199,6 @@ fn render_template(
     Ok(rendered)
 }
 
-fn expand_home(path: &str) -> PathBuf {
-    if path == "~" {
-        return dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    }
-    if let Some(rest) = path.strip_prefix("~/") {
-        return dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(rest);
-    }
-    PathBuf::from(path)
-}
-
 fn default_file<'a>(adapter: &'a ToolAdapter, purpose: FilePurpose) -> Result<&'a ToolFile> {
     let file_id = match purpose {
         FilePurpose::Render => adapter
@@ -231,18 +222,43 @@ fn ensure_route_allowed(ctx: &ToolContext<'_>, file: &ToolFile) -> Result<()> {
     if ctx.has_route(file.requires_route.as_deref()) {
         Ok(())
     } else {
-        bail!("Token is not scoped for the routes required by this tool")
+        let route = file.requires_route.as_deref().unwrap_or("<unspecified>");
+        bail!(
+            "Token '{}' is not scoped for route '{}' required by tool '{}'",
+            ctx.token_name,
+            route,
+            ctx.tool
+        )
     }
 }
 
+fn validate_managed_path(path: &str) -> Result<PathBuf> {
+    let managed_path = Path::new(path);
+    if managed_path.is_absolute()
+        || managed_path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        bail!(
+            "Invalid managed_path '{}': path must be relative and stay under the generated directory",
+            path
+        );
+    }
+    Ok(managed_path.to_path_buf())
+}
+
 impl<'a> ToolContext<'a> {
-    fn new(config: &'a Config, token_name: &'a str, tool: &str) -> Result<Self> {
+    fn new(config: &'a Config, token_name: &'a str, tool: &'a str) -> Result<Self> {
         let entry = config
             .tokens
             .get(token_name)
             .ok_or_else(|| anyhow!("Token '{}' not found in config", token_name))?;
         let gateway_url = config.gateway_url.trim_end_matches('/');
         Ok(Self {
+            tool,
             token_name,
             token_value: &entry.token,
             gateway_url,
@@ -276,7 +292,7 @@ enum FilePurpose {
 mod tests {
     use super::{get_tool_adapter, install_tool_file, render_tool_env, render_tool_file};
     use crate::config::{Config, TokenEntry};
-    use crate::test_support::with_temp_home;
+    use crate::test_support::with_temp_config_root;
     use std::collections::HashMap;
 
     fn config_with_scope(scope: &[&str]) -> Config {
@@ -298,7 +314,7 @@ mod tests {
 
     #[test]
     fn shell_adapter_preserves_existing_exports() {
-        with_temp_home(|_temp| {
+        with_temp_config_root(|_temp| {
             let config = config_with_scope(&["anthropic", "openai", "github", "ollama", "httpbin"]);
             let exports = render_tool_env(&config, "shell", "laptop").unwrap();
 
@@ -321,7 +337,7 @@ mod tests {
 
     #[test]
     fn gh_adapter_exports_enterprise_credentials() {
-        with_temp_home(|_temp| {
+        with_temp_config_root(|_temp| {
             let config = config_with_scope(&["github"]);
             let exports = render_tool_env(&config, "gh", "laptop").unwrap();
 
@@ -338,7 +354,7 @@ mod tests {
 
     #[test]
     fn opencode_env_materializes_managed_config() {
-        with_temp_home(|temp| {
+        with_temp_config_root(|temp| {
             let config = config_with_scope(&["openai", "anthropic"]);
             let exports = render_tool_env(&config, "opencode", "laptop").unwrap();
 
@@ -357,7 +373,7 @@ mod tests {
 
     #[test]
     fn codex_install_writes_default_config() {
-        with_temp_home(|temp| {
+        with_temp_config_root(|temp| {
             let config = config_with_scope(&["openai"]);
             let path = install_tool_file(&config, "codex", "laptop").unwrap();
 
@@ -371,7 +387,7 @@ mod tests {
 
     #[test]
     fn user_tools_file_overrides_builtin_adapter() {
-        with_temp_home(|_temp| {
+        with_temp_config_root(|_temp| {
             let tools_path = Config::tools_path();
             std::fs::create_dir_all(tools_path.parent().unwrap()).unwrap();
             std::fs::write(
@@ -393,7 +409,7 @@ value = "1"
 
     #[test]
     fn experimental_claude_render_is_available() {
-        with_temp_home(|_temp| {
+        with_temp_config_root(|_temp| {
             let config = config_with_scope(&["anthropic"]);
             let adapter = get_tool_adapter("claude-code").unwrap();
             assert!(adapter.experimental);
@@ -403,6 +419,76 @@ value = "1"
             assert!(
                 render.contains("export ANTHROPIC_BASE_URL=\"https://gw.example.com/anthropic\"")
             );
+        });
+    }
+
+    #[test]
+    fn default_file_error_names_tool_and_required_route() {
+        with_temp_config_root(|_temp| {
+            let config = config_with_scope(&["github"]);
+            let error = render_tool_file(&config, "codex", "laptop").unwrap_err();
+            let message = error.to_string();
+
+            assert!(message.contains("tool 'codex'"));
+            assert!(message.contains("route 'openai'"));
+        });
+    }
+
+    #[test]
+    fn managed_path_rejects_parent_traversal() {
+        with_temp_config_root(|_temp| {
+            let tools_path = Config::tools_path();
+            std::fs::create_dir_all(tools_path.parent().unwrap()).unwrap();
+            std::fs::write(
+                &tools_path,
+                r#"
+[adapters.bad]
+[[adapters.bad.files]]
+id = "escape"
+managed_path = "../escape.txt"
+content = "nope"
+
+[[adapters.bad.env]]
+key = "BAD_CONFIG"
+value = "{{managed_file:escape}}"
+"#,
+            )
+            .unwrap();
+
+            let config = config_with_scope(&[]);
+            let error = render_tool_env(&config, "bad", "laptop").unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("Invalid managed_path '../escape.txt'"));
+        });
+    }
+
+    #[test]
+    fn managed_path_rejects_absolute_paths() {
+        with_temp_config_root(|_temp| {
+            let tools_path = Config::tools_path();
+            std::fs::create_dir_all(tools_path.parent().unwrap()).unwrap();
+            std::fs::write(
+                &tools_path,
+                r#"
+[adapters.bad]
+[[adapters.bad.files]]
+id = "absolute"
+managed_path = "/tmp/escape.txt"
+content = "nope"
+
+[[adapters.bad.env]]
+key = "BAD_CONFIG"
+value = "{{managed_file:absolute}}"
+"#,
+            )
+            .unwrap();
+
+            let config = config_with_scope(&[]);
+            let error = render_tool_env(&config, "bad", "laptop").unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("Invalid managed_path '/tmp/escape.txt'"));
         });
     }
 }

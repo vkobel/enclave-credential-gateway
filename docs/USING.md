@@ -23,7 +23,7 @@ admin_token = "..."   # only needed for token management commands
 
 **3. Create a token:**
 
-Scope values are route prefixes from your profile. Omit `--scope` to allow all routes.
+Scope values are route prefixes from your profile. Omit `--scope` to create an unrestricted token that allows all current and future routes.
 
 ```bash
 # Via coco CLI (requires admin_token in config)

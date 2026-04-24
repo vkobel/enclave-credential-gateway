@@ -13,7 +13,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
+use tracing::warn;
 use uuid::Uuid;
+
+const UNRESTRICTED_SCOPE_WARNING: &str = "Empty token scope allows all current and future routes.";
 
 #[derive(Deserialize)]
 pub struct CreateTokenRequest {
@@ -29,6 +32,8 @@ struct TokenResponse {
     scope: Vec<String>,
     created_at: chrono::DateTime<chrono::Utc>,
     token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warning: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -87,6 +92,12 @@ async fn create_token(
     };
 
     let (record, token_value) = registry.create_token(req.name, req.scope).await;
+    let warning = record
+        .is_unrestricted()
+        .then(|| UNRESTRICTED_SCOPE_WARNING.to_string());
+    if let Some(warning) = &warning {
+        warn!("Created unrestricted token '{}': {}", record.name, warning);
+    }
 
     Json(TokenResponse {
         id: record.id,
@@ -94,6 +105,7 @@ async fn create_token(
         scope: record.scope,
         created_at: record.created_at,
         token: token_value,
+        warning,
     })
     .into_response()
 }

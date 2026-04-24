@@ -10,6 +10,7 @@ struct TokenResponse {
     scope: Vec<String>,
     created_at: String,
     token: String,
+    warning: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -72,6 +73,9 @@ pub async fn create(name: &str, scope: &[String]) -> Result<()> {
     println!("scope:      {:?}", token_resp.scope);
     println!("created_at: {}", token_resp.created_at);
     println!("token:      {}", token_resp.token);
+    if let Some(warning) = token_resp.warning {
+        eprintln!("Warning: {warning}");
+    }
     eprintln!("\nSaved to {}", crate::config::Config::path().display());
     Ok(())
 }

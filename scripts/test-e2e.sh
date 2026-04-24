@@ -221,19 +221,31 @@ EOF
 
 CLI_STDOUT="$CLI_HOME/stdout.txt"
 CLI_STDERR="$CLI_HOME/stderr.txt"
+TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+COCO_BIN="${TARGET_DIR%/}/debug/coco"
 CLI_ENV=(HOME="$CLI_HOME")
 [[ -n "${CARGO_HOME:-}" ]] && CLI_ENV+=(CARGO_HOME="$CARGO_HOME")
 [[ -z "${CARGO_HOME:-}" && -n "$REAL_HOME" ]] && CLI_ENV+=(CARGO_HOME="$REAL_HOME/.cargo")
 [[ -n "${RUSTUP_HOME:-}" ]] && CLI_ENV+=(RUSTUP_HOME="$RUSTUP_HOME")
 [[ -z "${RUSTUP_HOME:-}" && -n "$REAL_HOME" ]] && CLI_ENV+=(RUSTUP_HOME="$REAL_HOME/.rustup")
 
-if env "${CLI_ENV[@]}" cargo run -q -p coco-cli -- env github_only --codex >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
+if cargo build -q -p coco-cli; then
+  pass "Built coco CLI"
+else
+  fail "cargo build -p coco-cli failed"
+fi
+
+if [[ ! -x "$COCO_BIN" ]]; then
+  fail "Built coco CLI binary not found at $COCO_BIN"
+fi
+
+if env "${CLI_ENV[@]}" "$COCO_BIN" env github_only --codex >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
   pass "coco env --codex succeeds for non-OpenAI token"
 else
   fail "coco env --codex should not fail for non-OpenAI token"
 fi
 
-grep -q "export GH_HOST=localhost:8080" "$CLI_STDOUT" \
+grep -q "export GH_HOST=localhost:${GATEWAY_PORT}" "$CLI_STDOUT" \
   && pass "github-only env exports are printed" \
   || fail "github-only env exports missing"
 
@@ -245,19 +257,19 @@ grep -q "export GH_HOST=localhost:8080" "$CLI_STDOUT" \
   && pass "non-OpenAI --codex does not write Codex config" \
   || fail "non-OpenAI --codex wrote Codex config"
 
-if env "${CLI_ENV[@]}" cargo run -q -p coco-cli -- tool install codex github_only >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
+if env "${CLI_ENV[@]}" "$COCO_BIN" tool install codex github_only >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
   fail "coco tool install codex should reject non-OpenAI token"
 else
   pass "coco tool install codex rejects non-OpenAI token"
 fi
 
-if env "${CLI_ENV[@]}" cargo run -q -p coco-cli -- env laptop --codex >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
+if env "${CLI_ENV[@]}" "$COCO_BIN" env laptop --codex >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
   pass "coco env --codex writes Codex config for all-route token"
 else
   fail "coco env --codex should write Codex config for all-route token"
 fi
 
-grep -q 'openai_base_url = "http://localhost:8080/openai"' "$CLI_HOME/.codex/config.toml" \
+grep -q "openai_base_url = \"http://localhost:${GATEWAY_PORT}/openai\"" "$CLI_HOME/.codex/config.toml" \
   && pass "Codex config points at gateway OpenAI route" \
   || fail "Codex config missing gateway OpenAI route"
 

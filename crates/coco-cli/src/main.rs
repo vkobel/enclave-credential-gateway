@@ -68,7 +68,7 @@ enum TokenAction {
         /// Human-readable name for the token
         #[arg(long)]
         name: String,
-        /// Comma-separated route scopes (empty = all routes)
+        /// Comma-separated route scopes (empty = all current and future routes)
         #[arg(long, value_delimiter = ',')]
         scope: Vec<String>,
     },

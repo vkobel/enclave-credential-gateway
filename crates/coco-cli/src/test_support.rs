@@ -1,34 +1,62 @@
-use std::ffi::OsString;
-use std::sync::{Mutex, OnceLock};
+use std::cell::RefCell;
+use std::path::PathBuf;
 use tempfile::TempDir;
 
-pub fn with_temp_home<T>(f: impl FnOnce(&TempDir) -> T) -> T {
-    static HOME_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let lock = HOME_LOCK.get_or_init(|| Mutex::new(()));
-    let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+thread_local! {
+    static CONFIG_ROOT_OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    static HOME_DIR_OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+pub fn with_temp_config_root<T>(f: impl FnOnce(&TempDir) -> T) -> T {
     let temp = TempDir::new().unwrap();
-    let _home = HomeRestore::set(temp.path().as_os_str().to_os_string());
+    let _config = OverrideRestore::set_config_root(temp.path().join(".config/coco"));
+    let _home = OverrideRestore::set_home_dir(temp.path().to_path_buf());
 
     f(&temp)
 }
 
-struct HomeRestore {
-    old_home: Option<OsString>,
+pub(crate) fn config_root_override() -> Option<PathBuf> {
+    CONFIG_ROOT_OVERRIDE.with(|value| value.borrow().clone())
 }
 
-impl HomeRestore {
-    fn set(home: OsString) -> Self {
-        let old_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", home);
-        Self { old_home }
+pub(crate) fn home_dir_override() -> Option<PathBuf> {
+    HOME_DIR_OVERRIDE.with(|value| value.borrow().clone())
+}
+
+enum OverrideKind {
+    ConfigRoot,
+    HomeDir,
+}
+
+struct OverrideRestore {
+    kind: OverrideKind,
+    old_value: Option<PathBuf>,
+}
+
+impl OverrideRestore {
+    fn set_config_root(path: PathBuf) -> Self {
+        let old_value = CONFIG_ROOT_OVERRIDE.with(|value| value.replace(Some(path)));
+        Self {
+            kind: OverrideKind::ConfigRoot,
+            old_value,
+        }
+    }
+
+    fn set_home_dir(path: PathBuf) -> Self {
+        let old_value = HOME_DIR_OVERRIDE.with(|value| value.replace(Some(path)));
+        Self {
+            kind: OverrideKind::HomeDir,
+            old_value,
+        }
     }
 }
 
-impl Drop for HomeRestore {
+impl Drop for OverrideRestore {
     fn drop(&mut self) {
-        match &self.old_home {
-            Some(home) => std::env::set_var("HOME", home),
-            None => std::env::remove_var("HOME"),
-        }
+        let old_value = self.old_value.clone();
+        match self.kind {
+            OverrideKind::ConfigRoot => CONFIG_ROOT_OVERRIDE.with(|value| value.replace(old_value)),
+            OverrideKind::HomeDir => HOME_DIR_OVERRIDE.with(|value| value.replace(old_value)),
+        };
     }
 }

@@ -26,10 +26,12 @@ pub struct Config {
 
 impl Config {
     pub fn config_dir() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".config")
-            .join("coco")
+        #[cfg(test)]
+        if let Some(root) = crate::test_support::config_root_override() {
+            return root;
+        }
+
+        Self::home_dir().join(".config").join("coco")
     }
 
     pub fn path() -> PathBuf {
@@ -42,6 +44,25 @@ impl Config {
 
     pub fn generated_dir() -> PathBuf {
         Self::config_dir().join("generated")
+    }
+
+    pub(crate) fn expand_home(path: &str) -> PathBuf {
+        if path == "~" {
+            return Self::home_dir();
+        }
+        if let Some(rest) = path.strip_prefix("~/") {
+            return Self::home_dir().join(rest);
+        }
+        PathBuf::from(path)
+    }
+
+    fn home_dir() -> PathBuf {
+        #[cfg(test)]
+        if let Some(home) = crate::test_support::home_dir_override() {
+            return home;
+        }
+
+        dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
     }
 
     pub fn load() -> Result<Config> {

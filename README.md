@@ -43,7 +43,7 @@ For remote TLS, set `COCO_DOMAIN=gw.example.com` before `docker compose up -d --
 
 The built-in routes are defined in [profiles/routes.json](./profiles/routes.json). That file is embedded into the gateway binary at build time. The compose example also mounts [examples/profile.json](./examples/profile.json) as a runtime profile; set `COCO_PROFILE=/path/to/profile.json` to use another profile.
 
-Token scopes use the canonical route key. The `/api/v3/...` GitHub compatibility route is named `api` in paths, but scopes as `github`.
+Token scopes use the canonical route key. Empty scope is unrestricted and allows all current and future routes. The `/api/v3/...` GitHub compatibility route is named `api` in paths, but scopes as `github`.
 
 | Path prefix | Scope | Upstream | Credential env | Injection |
 |---|---|---|---|---|
@@ -129,29 +129,42 @@ scope = ["openai", "github"]
 
 ## Testing
 
-Fast local checks:
+Run the full local test suite before opening a PR:
 
 ```bash
 cargo fmt --check
 cargo test --workspace
+./scripts/test-e2e.sh
 ```
 
-`cargo test --workspace` runs CLI tests plus gateway auth, proxy, registry, admin API, inject-mode, and scope tests. Live gateway feature tests are ignored unless explicitly enabled.
+What these do:
+
+- `cargo fmt --check` verifies Rust formatting without changing files.
+- `cargo test --workspace` runs CLI tests plus gateway auth, proxy, registry, admin API, profile parsing, inject-mode, and token-scope tests. Live gateway feature tests are ignored unless explicitly enabled.
+- `./scripts/test-e2e.sh` runs the Docker-backed end-to-end flow: gateway startup, admin token creation, missing/wrong token handling, route-scope denial, revocation, CLI Codex compatibility, and optional upstream credential injection checks.
+
+Run focused package tests while iterating:
+
+```bash
+cargo test -p coco-gateway
+cargo test -p coco-cli
+```
 
 Compose-backed e2e:
 
 ```bash
 # Minimal run. COCO_ADMIN_TOKEN defaults to test-admin if omitted.
-export COCO_ADMIN_TOKEN=test-admin
-export HTTPBIN_TOKEN=anything
 ./scripts/test-e2e.sh
 ```
 
-The e2e script starts docker compose, creates registry tokens through the admin API, validates missing/wrong token handling, scope denial, revocation, CLI Codex compatibility, and httpbin credential injection. It tears down the compose project on exit. If port `8080` is occupied by an incompatible local gateway, it falls back to `18080`; override with `COCO_E2E_PORT=<port>`.
+The e2e script tears down the compose project on exit. If port `8080` is occupied by an incompatible local gateway, it falls back to `18080`; override with `COCO_E2E_PORT=<port>`.
 
 Optional live upstream checks:
 
 ```bash
+export HTTPBIN_TOKEN=anything
+./scripts/test-e2e.sh
+
 export OPENAI_API_KEY=sk-...
 ./scripts/test-e2e.sh
 
