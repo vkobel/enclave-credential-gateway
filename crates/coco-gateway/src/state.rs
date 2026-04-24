@@ -5,7 +5,6 @@ use crate::registry::TokenRegistry;
 use axum::body::Body;
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::{connect::HttpConnector, Client};
-use std::collections::HashMap;
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
@@ -16,17 +15,21 @@ pub struct AppState {
     pub token_registry: Option<Arc<TokenRegistry>>,
     pub admin_token: Zeroizing<String>,
     pub routes: Vec<(String, RouteEntry)>,
-    /// Maps alias path prefix → canonical route key (e.g. "api" → "github").
-    pub route_aliases: HashMap<String, String>,
     pub https_client: HttpsClient,
 }
 
 impl AppState {
-    /// Resolves a request path prefix to its canonical route key, following aliases.
-    pub fn resolve_route_key<'a>(&'a self, prefix: &'a str) -> &'a str {
-        self.route_aliases
-            .get(prefix)
-            .map(|s| s.as_str())
+    pub fn route_entry(&self, prefix: &str) -> Option<&RouteEntry> {
+        self.routes
+            .iter()
+            .find(|(key, _)| key == prefix)
+            .map(|(_, entry)| entry)
+    }
+
+    /// Resolves a request path prefix to its canonical route key.
+    pub fn canonical_route_key<'a>(&'a self, prefix: &'a str) -> &'a str {
+        self.route_entry(prefix)
+            .map(|entry| entry.canonical_route.as_str())
             .unwrap_or(prefix)
     }
 }

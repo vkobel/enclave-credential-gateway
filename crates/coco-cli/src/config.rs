@@ -10,6 +10,12 @@ pub struct TokenEntry {
     pub scope: Vec<String>,
 }
 
+impl TokenEntry {
+    pub fn allows_route(&self, route: &str) -> bool {
+        self.scope.is_empty() || self.scope.iter().any(|scoped_route| scoped_route == route)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
     pub gateway_url: String,
@@ -19,12 +25,23 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn path() -> PathBuf {
+    pub fn config_dir() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".config")
             .join("coco")
-            .join("config.toml")
+    }
+
+    pub fn path() -> PathBuf {
+        Self::config_dir().join("config.toml")
+    }
+
+    pub fn tools_path() -> PathBuf {
+        Self::config_dir().join("tools.toml")
+    }
+
+    pub fn generated_dir() -> PathBuf {
+        Self::config_dir().join("generated")
     }
 
     pub fn load() -> Result<Config> {

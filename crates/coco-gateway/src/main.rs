@@ -85,18 +85,9 @@ async fn main() {
         .unwrap_or(8080);
 
     let (routes, profile_path) = load_profile();
-    match profile_path {
-        Some(p) => info!("Loaded {} route(s) from profile at {}", routes.len(), p),
-        None => info!(
-            "No profile found, using built-in defaults ({} routes)",
-            routes.len()
-        ),
+    if let Some(p) = profile_path {
+        info!("Loaded {} route(s) from {}", routes.len(), p);
     }
-
-    let route_aliases: std::collections::HashMap<String, String> = routes
-        .iter()
-        .filter_map(|(key, entry)| entry.alias.as_ref().map(|a| (a.clone(), key.clone())))
-        .collect();
 
     let https_connector = HttpsConnectorBuilder::new()
         .with_webpki_roots()
@@ -111,7 +102,6 @@ async fn main() {
         token_registry,
         admin_token,
         routes,
-        route_aliases,
         https_client,
     });
 
