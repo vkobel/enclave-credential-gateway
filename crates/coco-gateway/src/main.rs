@@ -84,10 +84,11 @@ async fn main() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(8080);
 
-    let (routes, profile_path) = load_profile();
-    if let Some(p) = profile_path {
-        info!("Loaded {} route(s) from {}", routes.len(), p);
-    }
+    let routes = load_profile();
+    info!(
+        "Loaded {} embedded route(s) from profiles/routes.json",
+        routes.len()
+    );
 
     let https_connector = HttpsConnectorBuilder::new()
         .with_webpki_roots()

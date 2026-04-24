@@ -199,7 +199,7 @@ fn render_template(
     Ok(rendered)
 }
 
-fn default_file<'a>(adapter: &'a ToolAdapter, purpose: FilePurpose) -> Result<&'a ToolFile> {
+fn default_file(adapter: &ToolAdapter, purpose: FilePurpose) -> Result<&ToolFile> {
     let file_id = match purpose {
         FilePurpose::Render => adapter
             .default_render_file

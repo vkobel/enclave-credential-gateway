@@ -2,7 +2,6 @@
 
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 use tracing::warn;
 
 const EMBEDDED_PROFILE_PATH: &str = "profiles/routes.json";
@@ -16,10 +15,6 @@ pub struct CredentialSource {
     pub format: String,
     #[serde(default)]
     pub prefix: Option<String>,
-}
-
-pub(crate) fn default_inject_header() -> String {
-    "Authorization".to_string()
 }
 
 fn default_credential_format() -> String {
@@ -46,12 +41,6 @@ pub struct ProfileRoute {
     pub canonical: Option<String>,
     pub upstream: String,
     #[serde(default)]
-    pub credential_env: Option<String>,
-    #[serde(default = "default_inject_header")]
-    pub inject_header: String,
-    #[serde(default = "default_credential_format")]
-    pub credential_format: String,
-    #[serde(default)]
     pub credential_sources: Vec<CredentialSource>,
     #[serde(default)]
     pub strip_prefix: Option<String>,
@@ -61,10 +50,6 @@ pub struct ProfileRoute {
     pub url_path_prefix: Option<String>,
     #[serde(default)]
     pub inject_param: Option<String>,
-    /// Alternate path prefix that also routes here (e.g. "api" for the github route,
-    /// since `gh` CLI sends /api/v3/... when GH_HOST is set).
-    #[serde(default)]
-    pub alias: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -86,22 +71,10 @@ impl RouteEntry {
                 prefix
             );
         }
-        let sources = if !route.credential_sources.is_empty() {
-            route.credential_sources
-        } else if let Some(env) = route.credential_env {
-            vec![CredentialSource {
-                env,
-                inject_header: route.inject_header,
-                format: route.credential_format,
-                prefix: None,
-            }]
-        } else {
-            vec![]
-        };
         RouteEntry {
             canonical_route: route.canonical.unwrap_or_else(|| prefix.to_string()),
             upstream: route.upstream,
-            credential_sources: sources,
+            credential_sources: route.credential_sources,
             strip_prefix: route.strip_prefix,
             inject_mode: route.inject_mode,
             url_path_prefix: route.url_path_prefix,
@@ -110,45 +83,13 @@ impl RouteEntry {
     }
 }
 
-pub fn load_profile() -> (Vec<(String, RouteEntry)>, Option<String>) {
-    if let Ok(path) = std::env::var("COCO_PROFILE") {
-        let routes = load_profile_from_path(&path);
-        return (routes, Some(path));
-    }
-
-    let legacy_path = "/etc/coco/profile.json";
-    if Path::new(legacy_path).exists() {
-        let routes = load_profile_from_path(legacy_path);
-        return (routes, Some(legacy_path.to_string()));
-    }
-
-    (
-        load_embedded_routes(),
-        Some(format!("embedded manifest {}", EMBEDDED_PROFILE_PATH)),
-    )
+pub fn load_profile() -> Vec<(String, RouteEntry)> {
+    load_embedded_routes()
 }
 
 pub fn load_embedded_routes() -> Vec<(String, RouteEntry)> {
     try_load_routes_from_str(EMBEDDED_PROFILE_PATH, EMBEDDED_PROFILE_JSON)
         .expect("embedded profile manifest must be valid")
-}
-
-fn load_profile_from_path(path: &str) -> Vec<(String, RouteEntry)> {
-    let contents = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("Failed to read profile at {}: {}", path, e);
-            std::process::exit(1);
-        }
-    };
-
-    match try_load_routes_from_str(path, &contents) {
-        Ok(routes) => routes,
-        Err(e) => {
-            tracing::error!("{}", e);
-            std::process::exit(1);
-        }
-    }
 }
 
 pub fn try_load_routes_from_str(
@@ -170,30 +111,10 @@ pub fn try_load_routes_from_str(
     }
 
     let mut routes = BTreeMap::new();
-    let mut alias_keys = BTreeSet::new();
     for (prefix, route) in profile.routes {
         let key = normalize_route_key(&prefix);
-        let alias = route.alias.clone().map(|a| normalize_route_key(&a));
         let entry = RouteEntry::from_profile(&key, route);
         routes.insert(key.clone(), entry.clone());
-
-        if let Some(alias_key) = alias {
-            if !alias_key.is_empty() && alias_key != key {
-                if original_keys.contains(&alias_key) {
-                    return Err(format!(
-                        "Profile alias '{}' for route '{}' collides with a route key",
-                        alias_key, key
-                    ));
-                }
-                if !alias_keys.insert(alias_key.clone()) {
-                    return Err(format!(
-                        "Profile alias '{}' for route '{}' collides with another alias",
-                        alias_key, key
-                    ));
-                }
-                routes.insert(alias_key, entry.clone());
-            }
-        }
     }
 
     Ok(routes.into_iter().collect())

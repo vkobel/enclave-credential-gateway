@@ -263,7 +263,7 @@ Revocation takes effect immediately. In-flight requests complete; all subsequent
 |---|---|---|
 | `407 Proxy Authentication Required` | Wrong or missing phantom token | Check `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` match your token value |
 | `403 Forbidden` | Token doesn't have this route in its scope | Recreate token with correct `--scope`, or omit scope for all routes |
-| `404 Not Found` | Unknown route prefix | Check the prefix matches a route key in `profile.json` |
+| `404 Not Found` | Unknown route prefix | Check the prefix matches a built-in route key in `profiles/routes.json` |
 | `503 Service Unavailable` | Real credential env var missing on the gateway | Set the credential env var and restart |
 | `coco env` fails | Token not in config file | Add `[tokens] laptop = "ccgw_..."` to `~/.config/coco/config.toml` |
 | `GH_HOST` is wrong | Set to full URL instead of hostname | `GH_HOST` must be just the hostname (`gw.example.com`), not a URL |

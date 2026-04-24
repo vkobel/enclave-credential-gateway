@@ -41,7 +41,7 @@ For remote TLS, set `COCO_DOMAIN=gw.example.com` before `docker compose up -d --
 
 ## Route Definitions
 
-The built-in routes are defined in [profiles/routes.json](./profiles/routes.json). That file is embedded into the gateway binary at build time. The compose example also mounts [examples/profile.json](./examples/profile.json) as a runtime profile; set `COCO_PROFILE=/path/to/profile.json` to use another profile.
+The built-in routes are defined in [profiles/routes.json](./profiles/routes.json). That file is embedded into the gateway binary at build time; runtime route overrides are intentionally not supported yet.
 
 Token scopes use the canonical route key. Empty scope is unrestricted and allows all current and future routes. The `/api/v3/...` GitHub compatibility route is named `api` in paths, but scopes as `github`.
 
@@ -50,7 +50,7 @@ Token scopes use the canonical route key. Empty scope is unrestricted and allows
 | `/openai/...` | `openai` | `https://api.openai.com` | `OPENAI_API_KEY` | `Authorization: Bearer ...` |
 | `/anthropic/...` | `anthropic` | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` | OAuth tokens as `Authorization: Bearer ...`, API keys as `x-api-key` |
 | `/github/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` | `Authorization: Bearer ...` |
-| `/api/v3/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` | `gh` compatibility alias; strips `/v3` |
+| `/api/v3/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` | `gh` compatibility route; strips route-relative `/v3` |
 | `/httpbin/...` | `httpbin` | `https://httpbin.org` | `HTTPBIN_TOKEN` | `Authorization: Bearer ...` |
 | `/ollama/...` | `ollama` | `https://127.0.0.1:11434` | `OLLAMA_API_KEY` | `Authorization: Bearer ...` |
 | `/telegram/...` | `telegram` | `https://api.telegram.org` | `TELEGRAM_BOT_TOKEN` | URL path token injection |
@@ -58,7 +58,17 @@ Token scopes use the canonical route key. Empty scope is unrestricted and allows
 | `/together/...` | `together` | `https://api.together.xyz` | `TOGETHER_API_KEY` | `Authorization: Bearer ...` |
 | `/elevenlabs/...` | `elevenlabs` | `https://api.elevenlabs.io` | `ELEVENLABS_API_KEY` | `xi-api-key` |
 
-Profile fields are intentionally small: `upstream`, `credential_sources` or `credential_env`, `inject_mode`, optional `canonical`, optional `strip_prefix`, optional `url_path_prefix`, and optional `inject_param`.
+Route manifest fields are intentionally small:
+
+| Field | Purpose |
+|---|---|
+| `upstream` | Base upstream URL |
+| `credential_sources` | Ordered env-backed credentials with `env`, `inject_header`, optional `format`, and optional `prefix` |
+| `inject_mode` | `header`, `url_path`, or `query_param`; defaults to `header` |
+| `canonical` | Scope key for compatibility routes such as `api` -> `github` |
+| `strip_prefix` | Route-relative path prefix to remove before forwarding |
+| `url_path_prefix` | Prefix used by `url_path` credential injection |
+| `inject_param` | Query parameter name used by `query_param` credential injection |
 
 ## CLI
 
@@ -111,7 +121,6 @@ Gateway environment:
 |---|---:|---|---|
 | `COCO_ADMIN_TOKEN` | yes | none | Admin API bearer token |
 | `COCO_LISTEN_PORT` | no | `8080` | Gateway listen port |
-| `COCO_PROFILE` | no | embedded routes or `/etc/coco/profile.json` | Route profile path |
 | `COCO_TOKENS_FILE` | no | `/data/tokens.json` in compose | Registry storage |
 | `COCO_PHANTOM_TOKEN` | no | none | Legacy single-token fallback |
 | `COCO_DOMAIN` | no | none | Domain for Caddy TLS |

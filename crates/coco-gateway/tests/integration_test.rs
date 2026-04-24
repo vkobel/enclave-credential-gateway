@@ -58,29 +58,6 @@ mod profile_tests {
     use coco_gateway::{InjectMode, ProfileRoute, RouteEntry};
 
     #[test]
-    fn test_profile_json_parsing_legacy_format() {
-        let json = r#"{
-            "upstream": "http://localhost:9999",
-            "credential_env": "TEST_TOKEN",
-            "inject_header": "Authorization",
-            "credential_format": "Bearer {}"
-        }"#;
-
-        let route: ProfileRoute = serde_json::from_str(json).unwrap();
-        assert_eq!(route.upstream, "http://localhost:9999");
-        assert_eq!(route.credential_env.as_deref(), Some("TEST_TOKEN"));
-        assert_eq!(route.inject_header, "Authorization");
-        assert_eq!(route.credential_format, "Bearer {}");
-        assert!(route.credential_sources.is_empty());
-        assert_eq!(route.inject_mode, InjectMode::Header);
-
-        let entry = RouteEntry::from_profile("test", route);
-        assert_eq!(entry.upstream, "http://localhost:9999");
-        assert_eq!(entry.credential_sources.len(), 1);
-        assert_eq!(entry.credential_sources[0].env, "TEST_TOKEN");
-    }
-
-    #[test]
     fn test_credential_sources_parsing() {
         let json = r#"{
             "upstream": "https://api.anthropic.com",
@@ -122,9 +99,13 @@ mod profile_tests {
 
     #[test]
     fn test_inject_mode_default_is_header() {
-        let json = r##"{"upstream": "http://test", "credential_env": "X"}"##;
+        let json = r##"{
+            "upstream": "http://test",
+            "credential_sources": [{"env": "TEST_TOKEN", "inject_header": "Authorization"}]
+        }"##;
         let route: ProfileRoute = serde_json::from_str(json).unwrap();
         assert_eq!(route.inject_mode, InjectMode::Header);
+        assert_eq!(route.credential_sources[0].format, "Bearer {}");
     }
 
     #[test]
@@ -205,13 +186,36 @@ mod profile_tests {
     }
 
     #[test]
+    fn test_embedded_github_compat_route_strips_v3() {
+        let routes = load_embedded_routes();
+        let api = routes.iter().find(|(key, _)| key == "api").unwrap();
+
+        assert_eq!(api.1.canonical_route, "github");
+        assert_eq!(api.1.strip_prefix.as_deref(), Some("/v3"));
+
+        let path = "/api/v3/";
+        let prefix = "api";
+        let upstream_path = &path[prefix.len() + 1..];
+        let stripped = upstream_path
+            .strip_prefix(api.1.strip_prefix.as_deref().unwrap())
+            .unwrap_or(upstream_path);
+        assert_eq!(stripped, "/");
+    }
+
+    #[test]
     fn test_profile_routes_are_returned_in_deterministic_order() {
         let routes = try_load_routes_from_str(
             "test",
             r#"{
                 "routes": {
-                    "zeta": {"upstream": "https://z.example"},
-                    "alpha": {"upstream": "https://a.example"}
+                    "zeta": {
+                        "upstream": "https://z.example",
+                        "credential_sources": [{"env": "Z_TOKEN", "inject_header": "Authorization"}]
+                    },
+                    "alpha": {
+                        "upstream": "https://a.example",
+                        "credential_sources": [{"env": "A_TOKEN", "inject_header": "Authorization"}]
+                    }
                 }
             }"#,
         )
@@ -219,40 +223,6 @@ mod profile_tests {
 
         let keys: Vec<_> = routes.into_iter().map(|(key, _)| key).collect();
         assert_eq!(keys, vec!["alpha", "zeta"]);
-    }
-
-    #[test]
-    fn test_profile_alias_cannot_collide_with_later_route_key() {
-        let error = try_load_routes_from_str(
-            "test",
-            r#"{
-                "routes": {
-                    "alpha": {"upstream": "https://a.example", "alias": "zeta"},
-                    "zeta": {"upstream": "https://z.example"}
-                }
-            }"#,
-        )
-        .unwrap_err();
-
-        assert!(error.contains("alias 'zeta'"));
-        assert!(error.contains("collides with a route key"));
-    }
-
-    #[test]
-    fn test_profile_alias_cannot_collide_with_prior_alias() {
-        let error = try_load_routes_from_str(
-            "test",
-            r#"{
-                "routes": {
-                    "alpha": {"upstream": "https://a.example", "alias": "shared"},
-                    "zeta": {"upstream": "https://z.example", "alias": "shared"}
-                }
-            }"#,
-        )
-        .unwrap_err();
-
-        assert!(error.contains("alias 'shared'"));
-        assert!(error.contains("collides with another alias"));
     }
 }
 

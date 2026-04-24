@@ -314,10 +314,9 @@ Each step is a direction, not a commitment. Each is justified by what v1
   right experience for first-time credential entry; we will not ship
   hand-wavy crypto for it.
 - **Minimal admin web UI** for non-CLI users.
-- **Profile presets beyond the v1 seven** (Cloudflare, Stripe, Pushover,
-  AWS SigV4, Google OAuth, …). v1 ships OpenAI, Anthropic, GitHub,
-  Telegram, Slack, Linear, Notion; anything else is still a copy-paste
-  from `examples/profile.json`.
+- **Route presets beyond the v1 set** (Cloudflare, Stripe, Pushover,
+  AWS SigV4, Google OAuth, …). v1 ships a compiled built-in route
+  manifest; additional route extension needs an explicit design.
 
 **v2 — small teams.**
 - Multi-operator: more than one admin, role separation (admin / read-only /

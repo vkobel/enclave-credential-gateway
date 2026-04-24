@@ -141,10 +141,7 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
             let status = resp.status();
             info!("{} {} → {} [{}]", method, path, upstream_url, status);
             let resp_headers = resp.headers().clone();
-            let body = Body::new(
-                resp.into_body()
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)),
-            );
+            let body = Body::new(resp.into_body().map_err(std::io::Error::other));
             let mut response = Response::new(body);
             *response.status_mut() = status;
             *response.headers_mut() = resp_headers;

@@ -12,7 +12,6 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - HTTPBIN_TOKEN=${HTTPBIN_TOKEN}
     volumes:
-      - ./examples/profile.json:/etc/coco/profile.json:ro
       - coco-data:/data
     restart: unless-stopped
 
