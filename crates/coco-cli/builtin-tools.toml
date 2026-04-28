@@ -46,6 +46,7 @@ key = "HTTPBIN_TOKEN"
 value = "{{token}}"
 
 [adapters.gh]
+git_credential_helper = true
 
 [[adapters.gh.env]]
 requires_route = "github"

@@ -17,6 +17,8 @@ pub struct ToolAdapter {
     #[serde(default)]
     pub experimental: bool,
     #[serde(default)]
+    pub git_credential_helper: bool,
+    #[serde(default)]
     pub default_render_file: Option<String>,
     #[serde(default)]
     pub default_install_file: Option<String>,
@@ -74,6 +76,10 @@ pub fn render_tool_env(config: &Config, tool: &str, token_name: &str) -> Result<
         }
         let value = render_template(&env.value, &ctx, &managed_files)?;
         exports.push(format!("export {}={}", env.key, value));
+    }
+
+    if adapter.git_credential_helper && ctx.has_route(Some("github")) {
+        exports.extend(render_git_credential_helper_env(&ctx));
     }
 
     Ok(exports)
@@ -197,6 +203,65 @@ fn render_template(
 
     rendered.push_str(rest);
     Ok(rendered)
+}
+
+fn render_git_credential_helper_env(ctx: &ToolContext<'_>) -> Vec<String> {
+    let key = format!("credential.{}.helper", ctx.gateway_url);
+    let helper = format!("!coco git-credential {}", shell_word(ctx.token_name));
+
+    vec![
+        r#"__coco_git_config_original_count="${GIT_CONFIG_COUNT:-0}""#.to_string(),
+        r#"__coco_git_config_next=0"#.to_string(),
+        r#"__coco_git_config_i=0"#.to_string(),
+        format!("__coco_git_config_key={}", shell_quote(&key)),
+        format!("__coco_git_config_value={}", shell_quote(&helper)),
+        r#"while [ "$__coco_git_config_i" -lt "$__coco_git_config_original_count" ]; do"#
+            .to_string(),
+        r#"  eval "__coco_git_config_existing_key=\${GIT_CONFIG_KEY_${__coco_git_config_i}-}""#
+            .to_string(),
+        r#"  eval "__coco_git_config_existing_value=\${GIT_CONFIG_VALUE_${__coco_git_config_i}-}""#
+            .to_string(),
+        r#"  if [ "$__coco_git_config_existing_key" != "$__coco_git_config_key" ]; then"#
+            .to_string(),
+        r#"    eval "export GIT_CONFIG_KEY_${__coco_git_config_next}=\$__coco_git_config_existing_key""#
+            .to_string(),
+        r#"    eval "export GIT_CONFIG_VALUE_${__coco_git_config_next}=\$__coco_git_config_existing_value""#
+            .to_string(),
+        r#"    __coco_git_config_next=$((__coco_git_config_next + 1))"#.to_string(),
+        r#"  fi"#.to_string(),
+        r#"  __coco_git_config_i=$((__coco_git_config_i + 1))"#.to_string(),
+        r#"done"#.to_string(),
+        r#"eval "export GIT_CONFIG_KEY_${__coco_git_config_next}=\$__coco_git_config_key""#
+            .to_string(),
+        r#"eval "export GIT_CONFIG_VALUE_${__coco_git_config_next}=""#.to_string(),
+        r#"__coco_git_config_next=$((__coco_git_config_next + 1))"#.to_string(),
+        r#"eval "export GIT_CONFIG_KEY_${__coco_git_config_next}=\$__coco_git_config_key""#
+            .to_string(),
+        r#"eval "export GIT_CONFIG_VALUE_${__coco_git_config_next}=\$__coco_git_config_value""#
+            .to_string(),
+        r#"export GIT_CONFIG_COUNT=$((__coco_git_config_next + 1))"#.to_string(),
+        r#"unset __coco_git_config_original_count __coco_git_config_next __coco_git_config_i __coco_git_config_key __coco_git_config_value __coco_git_config_existing_key __coco_git_config_existing_value"#
+            .to_string(),
+    ]
+}
+
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn shell_word(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'@' | b'%' | b'+' | b'=' | b':' | b',' | b'.' | b'/' | b'-'))
+    {
+        value.to_string()
+    } else {
+        shell_quote(value)
+    }
 }
 
 fn default_file(adapter: &ToolAdapter, purpose: FilePurpose) -> Result<&ToolFile> {
@@ -347,7 +412,84 @@ mod tests {
                     "export GH_HOST=gw.example.com",
                     "export GH_ENTERPRISE_TOKEN=ccgw_test",
                     "export GH_TOKEN=ccgw_test",
+                    "__coco_git_config_original_count=\"${GIT_CONFIG_COUNT:-0}\"",
+                    "__coco_git_config_next=0",
+                    "__coco_git_config_i=0",
+                    "__coco_git_config_key='credential.https://gw.example.com.helper'",
+                    "__coco_git_config_value='!coco git-credential laptop'",
+                    "while [ \"$__coco_git_config_i\" -lt \"$__coco_git_config_original_count\" ]; do",
+                    "  eval \"__coco_git_config_existing_key=\\${GIT_CONFIG_KEY_${__coco_git_config_i}-}\"",
+                    "  eval \"__coco_git_config_existing_value=\\${GIT_CONFIG_VALUE_${__coco_git_config_i}-}\"",
+                    "  if [ \"$__coco_git_config_existing_key\" != \"$__coco_git_config_key\" ]; then",
+                    "    eval \"export GIT_CONFIG_KEY_${__coco_git_config_next}=\\$__coco_git_config_existing_key\"",
+                    "    eval \"export GIT_CONFIG_VALUE_${__coco_git_config_next}=\\$__coco_git_config_existing_value\"",
+                    "    __coco_git_config_next=$((__coco_git_config_next + 1))",
+                    "  fi",
+                    "  __coco_git_config_i=$((__coco_git_config_i + 1))",
+                    "done",
+                    "eval \"export GIT_CONFIG_KEY_${__coco_git_config_next}=\\$__coco_git_config_key\"",
+                    "eval \"export GIT_CONFIG_VALUE_${__coco_git_config_next}=\"",
+                    "__coco_git_config_next=$((__coco_git_config_next + 1))",
+                    "eval \"export GIT_CONFIG_KEY_${__coco_git_config_next}=\\$__coco_git_config_key\"",
+                    "eval \"export GIT_CONFIG_VALUE_${__coco_git_config_next}=\\$__coco_git_config_value\"",
+                    "export GIT_CONFIG_COUNT=$((__coco_git_config_next + 1))",
+                    "unset __coco_git_config_original_count __coco_git_config_next __coco_git_config_i __coco_git_config_key __coco_git_config_value __coco_git_config_existing_key __coco_git_config_existing_value",
                 ]
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gh_adapter_git_config_env_is_idempotent() {
+        use std::process::Command;
+
+        with_temp_config_root(|_temp| {
+            let config = config_with_scope(&["github"]);
+            let exports = render_tool_env(&config, "gh", "laptop").unwrap();
+            let script = format!(
+                r#"
+GIT_CONFIG_COUNT=4
+GIT_CONFIG_KEY_0=credential.https://gw.example.com.helper
+GIT_CONFIG_VALUE_0='!old-helper'
+GIT_CONFIG_KEY_1=core.editor
+GIT_CONFIG_VALUE_1=vim
+GIT_CONFIG_KEY_2=credential.https://other.example.com.helper
+GIT_CONFIG_VALUE_2='!other-helper'
+GIT_CONFIG_KEY_3=credential.https://gw.example.com.helper
+GIT_CONFIG_VALUE_3='!older-helper'
+{exports}
+{exports}
+printf '%s\n' \
+  "$GIT_CONFIG_COUNT" \
+  "$GIT_CONFIG_KEY_0" "$GIT_CONFIG_VALUE_0" \
+  "$GIT_CONFIG_KEY_1" "$GIT_CONFIG_VALUE_1" \
+  "$GIT_CONFIG_KEY_2" "$GIT_CONFIG_VALUE_2" \
+  "$GIT_CONFIG_KEY_3" "$GIT_CONFIG_VALUE_3"
+"#,
+                exports = exports.join("\n")
+            );
+
+            let output = Command::new("sh").arg("-c").arg(script).output().unwrap();
+
+            assert!(
+                output.status.success(),
+                "stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                concat!(
+                    "4\n",
+                    "core.editor\n",
+                    "vim\n",
+                    "credential.https://other.example.com.helper\n",
+                    "!other-helper\n",
+                    "credential.https://gw.example.com.helper\n",
+                    "\n",
+                    "credential.https://gw.example.com.helper\n",
+                    "!coco git-credential laptop\n",
+                )
             );
         });
     }

@@ -34,6 +34,14 @@ enum Commands {
         #[command(subcommand)]
         action: TokenAction,
     },
+    /// Internal Git credential helper
+    #[command(name = "git-credential", hide = true)]
+    GitCredential {
+        /// Token name from config [tokens] section
+        name: String,
+        /// Git credential operation: get, store, or erase
+        operation: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -96,6 +104,9 @@ async fn main() -> anyhow::Result<()> {
             TokenAction::Ls => commands::token::list().await?,
             TokenAction::Revoke { name } => commands::token::revoke(&name).await?,
         },
+        Commands::GitCredential { name, operation } => {
+            commands::git_credential::run(&name, &operation)?
+        }
     }
     Ok(())
 }

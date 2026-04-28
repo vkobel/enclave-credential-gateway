@@ -10,6 +10,7 @@
 #   export HTTPBIN_TOKEN=anything           # optional, enables httpbin injection test
 #   export OPENAI_API_KEY=sk-...            # optional, enables live OpenAI test
 #   export ANTHROPIC_API_KEY=sk-ant-api-... # optional, enables live Anthropic test
+#   export GITHUB_TOKEN=ghp_...            # optional, enables live GitHub REST + git tests
 #   ./scripts/test-e2e.sh
 #
 # To skip a live upstream test, leave its real credential unset.
@@ -33,10 +34,12 @@ section() { echo; echo -e "${CYAN}$*${NC}"; }
 GW_TMPFILE=""
 CLI_HOME=""
 COMPOSE_OVERRIDE=""
+GH_E2E_WORKDIR=""
 cleanup() {
   echo
   [[ -n "$GW_TMPFILE" && -f "$GW_TMPFILE" ]] && rm -f "$GW_TMPFILE"
   [[ -n "$CLI_HOME" && -d "$CLI_HOME" ]] && rm -rf "$CLI_HOME"
+  [[ -n "$GH_E2E_WORKDIR" && -d "$GH_E2E_WORKDIR" ]] && rm -rf "$GH_E2E_WORKDIR"
 
   if [[ "$GW_ALREADY_RUNNING" == true ]]; then
     info "Gateway was already running — leaving it up"
@@ -49,6 +52,7 @@ cleanup() {
     fi
   fi
   [[ -n "$COMPOSE_OVERRIDE" && -f "$COMPOSE_OVERRIDE" ]] && rm -f "$COMPOSE_OVERRIDE"
+  true
 }
 trap cleanup EXIT
 GW_TMPFILE=$(mktemp)
@@ -414,6 +418,188 @@ else
     && pass "Response has choices ($choices)" \
     || fail "Response missing choices field"
 fi
+
+section "Route: github (live REST API + git smart-HTTP)"
+
+if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+  skip "GITHUB_TOKEN not set — skipping live GitHub tests"
+else
+
+GH_E2E_WORKDIR=$(mktemp -d)
+
+export HOME="$CLI_HOME"
+export PATH="${COCO_BIN%/*}:$PATH"
+eval "$("$COCO_BIN" tool env gh github_only)"
+export GIT_TERMINAL_PROMPT=0
+
+# Resolve authenticated username
+gh_user=$(curl -s \
+  -H "Authorization: Bearer ${GITHUB_SCOPED_TOKEN}" \
+  "http://localhost:${GATEWAY_PORT}/github/user" 2>/dev/null | jq -r '.login // empty')
+
+if [[ -n "$gh_user" ]]; then
+  pass "GitHub REST: GET /user → authenticated as ${gh_user}"
+else
+  fail "GitHub REST: GET /user → no login returned; skipping remaining GitHub tests"
+  gh_user=""
+fi
+
+if [[ -n "$gh_user" ]]; then
+
+GH_E2E_REPO="${gh_user}/coco-gateway-e2e"
+
+# Pre-cleanup from any previous run (best effort; 403 = no delete_repo scope)
+curl -s -o /dev/null -X DELETE \
+  -H "Authorization: Bearer ${GITHUB_SCOPED_TOKEN}" \
+  "http://localhost:${GATEWAY_PORT}/github/repos/${GH_E2E_REPO}" 2>/dev/null || true
+
+# Create private repo
+GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
+  -X POST \
+  -H "Authorization: Bearer ${GITHUB_SCOPED_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "{\"name\":\"coco-gateway-e2e\",\"private\":true,\"auto_init\":false,\"description\":\"coco-gateway e2e — safe to delete\"}" \
+  "http://localhost:${GATEWAY_PORT}/github/user/repos" 2>/dev/null)
+[[ "$GW_STATUS" == "201" ]] \
+  && pass "GitHub REST: created private repo ${GH_E2E_REPO}" \
+  || fail "GitHub REST: create repo → expected 201, got $GW_STATUS"
+
+# View repo
+GW_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Bearer ${GITHUB_SCOPED_TOKEN}" \
+  "http://localhost:${GATEWAY_PORT}/github/repos/${GH_E2E_REPO}" 2>/dev/null)
+[[ "$GW_STATUS" == "200" ]] \
+  && pass "GitHub REST: view repo → 200" \
+  || fail "GitHub REST: view repo → expected 200, got $GW_STATUS"
+
+# Clone via git smart-HTTP. Remote URL has no embedded token; the Git
+# credential helper emitted by `coco tool env gh` supplies Basic auth.
+git_remote="http://localhost:${GATEWAY_PORT}/${GH_E2E_REPO}.git"
+if git clone -q "$git_remote" "${GH_E2E_WORKDIR}/repo" 2>/dev/null; then
+  pass "git clone via gateway (smart-HTTP, credential helper)"
+else
+  fail "git clone via gateway failed"
+fi
+
+remote_url=$(git -C "${GH_E2E_WORKDIR}/repo" remote get-url origin 2>/dev/null || true)
+case "$remote_url" in
+  *"${GITHUB_SCOPED_TOKEN}"*|*ccgw_*) fail "git remote URL contains a token" ;;
+  *)                                  pass "git remote URL remains token-free" ;;
+esac
+
+# Push initial commit (tests git-receive-pack path)
+cd "${GH_E2E_WORKDIR}/repo"
+git config user.email "test@coco.local"
+git config user.name "CoCo E2E"
+echo "# coco-gateway-e2e" > README.md
+git add README.md
+git commit -q -m "init"
+git branch -M main
+if git push -q origin main 2>/dev/null; then
+  pass "git push (initial commit) via gateway (smart-HTTP)"
+else
+  fail "git push via gateway failed"
+fi
+
+# Create issue
+GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
+  -X POST \
+  -H "Authorization: Bearer ${GITHUB_SCOPED_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"e2e test issue","body":"created by coco-gateway e2e"}' \
+  "http://localhost:${GATEWAY_PORT}/github/repos/${GH_E2E_REPO}/issues" 2>/dev/null)
+GH_ISSUE_NUM=$(cat "$GW_TMPFILE" | jq -r '.number // empty')
+[[ "$GW_STATUS" == "201" && -n "$GH_ISSUE_NUM" ]] \
+  && pass "GitHub REST: created issue #${GH_ISSUE_NUM}" \
+  || fail "GitHub REST: create issue → expected 201, got $GW_STATUS"
+
+# Push PR branch (tests another git-receive-pack round-trip)
+git checkout -q -b feat/e2e-pr
+echo "e2e change" >> README.md
+git add README.md
+git commit -q -m "e2e change"
+if git push -q origin feat/e2e-pr 2>/dev/null; then
+  pass "git push (PR branch) via gateway"
+else
+  fail "git push (PR branch) via gateway failed"
+fi
+cd - >/dev/null
+
+# Create PR
+GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
+  -X POST \
+  -H "Authorization: Bearer ${GITHUB_SCOPED_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"e2e test PR","body":"created by coco-gateway e2e","head":"feat/e2e-pr","base":"main"}' \
+  "http://localhost:${GATEWAY_PORT}/github/repos/${GH_E2E_REPO}/pulls" 2>/dev/null)
+GH_PR_NUM=$(cat "$GW_TMPFILE" | jq -r '.number // empty')
+[[ "$GW_STATUS" == "201" && -n "$GH_PR_NUM" ]] \
+  && pass "GitHub REST: created PR #${GH_PR_NUM}" \
+  || fail "GitHub REST: create PR → expected 201, got $GW_STATUS"
+
+# Merge PR
+if [[ -n "${GH_PR_NUM:-}" ]]; then
+  GW_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+    -X PUT \
+    -H "Authorization: Bearer ${GITHUB_SCOPED_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d '{"merge_method":"squash"}' \
+    "http://localhost:${GATEWAY_PORT}/github/repos/${GH_E2E_REPO}/pulls/${GH_PR_NUM}/merge" 2>/dev/null)
+  [[ "$GW_STATUS" == "200" ]] \
+    && pass "GitHub REST: merged PR #${GH_PR_NUM}" \
+    || fail "GitHub REST: merge PR → expected 200, got $GW_STATUS"
+fi
+
+# git pull after merge (tests git-upload-pack with the squash commit)
+cd "${GH_E2E_WORKDIR}/repo"
+git checkout -q main
+if git pull -q 2>/dev/null; then
+  pass "git pull (post-merge) via gateway"
+else
+  fail "git pull via gateway failed"
+fi
+cd - >/dev/null
+
+# Close issue
+if [[ -n "${GH_ISSUE_NUM:-}" ]]; then
+  GW_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+    -X PATCH \
+    -H "Authorization: Bearer ${GITHUB_SCOPED_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d '{"state":"closed"}' \
+    "http://localhost:${GATEWAY_PORT}/github/repos/${GH_E2E_REPO}/issues/${GH_ISSUE_NUM}" 2>/dev/null)
+  [[ "$GW_STATUS" == "200" ]] \
+    && pass "GitHub REST: closed issue #${GH_ISSUE_NUM}" \
+    || fail "GitHub REST: close issue → expected 200, got $GW_STATUS"
+fi
+
+# Create release
+GW_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST \
+  -H "Authorization: Bearer ${GITHUB_SCOPED_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"tag_name":"v0.0.1-e2e","name":"E2E release","body":"test","draft":false,"prerelease":true}' \
+  "http://localhost:${GATEWAY_PORT}/github/repos/${GH_E2E_REPO}/releases" 2>/dev/null)
+[[ "$GW_STATUS" == "201" ]] \
+  && pass "GitHub REST: created release" \
+  || fail "GitHub REST: create release → expected 201, got $GW_STATUS"
+
+# Cleanup: delete test repo. Requires delete_repo scope on GITHUB_TOKEN.
+GW_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X DELETE \
+  -H "Authorization: Bearer ${GITHUB_SCOPED_TOKEN}" \
+  "http://localhost:${GATEWAY_PORT}/github/repos/${GH_E2E_REPO}" 2>/dev/null)
+if [[ "$GW_STATUS" == "204" ]]; then
+  pass "Cleaned up test repo ${GH_E2E_REPO}"
+else
+  skip "Repo cleanup skipped (GITHUB_TOKEN may lack delete_repo scope) — delete https://github.com/${GH_E2E_REPO} manually"
+fi
+
+fi # gh_user
+
+unset GIT_TERMINAL_PROMPT
+
+fi # GITHUB_TOKEN
 
 echo
 echo "════════════════════════════════════"

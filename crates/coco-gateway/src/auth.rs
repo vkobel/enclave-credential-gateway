@@ -163,7 +163,10 @@ pub async fn auth_middleware(
     // Git smart-HTTP uses 401 + WWW-Authenticate to challenge credentials;
     // 407 is treated as a proxy error and git does not retry with credentials.
     if crate::profile::is_git_smart_http(&path) {
-        warn!("{} {} — 401 missing or invalid token (git smart-HTTP)", method, path);
+        warn!(
+            "{} {} — 401 missing or invalid token (git smart-HTTP)",
+            method, path
+        );
         return (
             StatusCode::UNAUTHORIZED,
             [(
