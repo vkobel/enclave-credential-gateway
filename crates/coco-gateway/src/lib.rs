@@ -10,9 +10,12 @@ pub mod state;
 
 // Re-exports for convenience
 pub use auth::PhantomAuth;
-pub use profile::{CredentialSource, InjectMode, ProfileRoute, RouteEntry};
+pub use profile::{
+    is_git_smart_http, CredentialSource, GitProtocolRoute, InjectMode, ProfileRoute, RouteEntry,
+    RouteMatcher,
+};
 pub use registry::{TokenRecord, TokenRegistry, TokenStatus};
-pub use state::{AppState, HttpsClient};
+pub use state::{resolve_route, AppState, HttpsClient, ResolvedRoute};
 
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;

@@ -34,6 +34,16 @@
           "strip_prefix": "/v3"
         }
       ],
+      "git_protocol": {
+        "upstream": "https://github.com",
+        "credential_sources": [
+          {
+            "env": "GITHUB_TOKEN",
+            "inject_header": "Authorization",
+            "basic_user": "x-access-token"
+          }
+        ]
+      },
       "credential_sources": [
         {
           "env": "GITHUB_TOKEN",

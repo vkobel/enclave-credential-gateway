@@ -39,11 +39,30 @@ curl http://localhost:8080/httpbin/bearer \
 
 For remote TLS, set `COCO_DOMAIN=gw.example.com` before `docker compose up -d --build`; Caddy terminates HTTPS and proxies to the gateway.
 
+### Local HTTPS trust (dev only)
+
+Tools like `gh` that force HTTPS for custom hosts will hit Caddy's self-signed certificate for `localhost`. Trust Caddy's local CA once and all subsequent requests work without certificate errors:
+
+```bash
+# Extract Caddy's root CA from its data volume
+docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt /tmp/caddy-root.crt
+
+# macOS — trust system-wide
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain /tmp/caddy-root.crt
+
+# Linux (Debian/Ubuntu)
+# sudo cp /tmp/caddy-root.crt /usr/local/share/ca-certificates/caddy-local.crt
+# sudo update-ca-certificates
+```
+
+This is only needed for local development. Production deployments use `COCO_DOMAIN` with a real certificate.
+
 ## Route Definitions
 
 The built-in routes are defined in [profiles/routes.json](./profiles/routes.json). That file is embedded into the gateway binary at build time; runtime route overrides are intentionally not supported yet.
 
-Token scopes use the top-level route key. Empty scope is unrestricted and allows all current and future routes. GitHub also owns an `/api/v3/...` compatibility alias for `gh`; it scopes as `github` and strips `/v3` before forwarding.
+Token scopes use the top-level route key. Empty scope is unrestricted and allows all current and future routes. GitHub also owns an `/api/v3/...` compatibility alias for `gh`; it scopes as `github` and strips `/v3` before forwarding. The git smart-HTTP path (`/<owner>/<repo>.git/...`) also scopes as `github` and proxies to `github.com` so `gh repo clone` works through the gateway.
 
 | Path prefix | Scope | Upstream | Credential env | Injection |
 |---|---|---|---|---|
@@ -51,6 +70,7 @@ Token scopes use the top-level route key. Empty scope is unrestricted and allows
 | `/anthropic/...` | `anthropic` | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` | OAuth tokens as `Authorization: Bearer ...`, API keys as `x-api-key` |
 | `/github/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` | `Authorization: Bearer ...` |
 | `/api/v3/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` | `gh` compatibility route; strips route-relative `/v3` |
+| `/<owner>/<repo>.git/{info/refs,git-upload-pack,git-receive-pack}` | `github` | `https://github.com` | `GITHUB_TOKEN` | git smart-HTTP for `gh repo clone`; accepts HTTP Basic auth |
 | `/httpbin/...` | `httpbin` | `https://httpbin.org` | `HTTPBIN_TOKEN` | `Authorization: Bearer ...` |
 | `/ollama/...` | `ollama` | `https://127.0.0.1:11434` | `OLLAMA_API_KEY` | `Authorization: Bearer ...` |
 | `/telegram/...` | `telegram` | `https://api.telegram.org` | `TELEGRAM_BOT_TOKEN` | URL path token injection |
@@ -96,6 +116,7 @@ Supported fields:
 | `strip_prefix` | Alias path prefix to remove before forwarding |
 | `inject_mode` | `header` or `url_path`; defaults to `header` |
 | `url_path_prefix` | Prefix used by `url_path` credential injection |
+| `git_protocol` | Optional companion route that proxies git smart-HTTP requests (`/<owner>/<repo>.git/...`) to a separate `upstream`. Currently used only by `github`; shares scope and credentials with the parent route. |
 
 ## CLI
 

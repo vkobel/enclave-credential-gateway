@@ -12,6 +12,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use std::sync::Arc;
 use tracing::{info, warn};
 use zeroize::Zeroizing;
@@ -23,24 +24,55 @@ pub struct PhantomAuth {
     pub token_record: Option<TokenRecord>,
 }
 
+/// Splits an `Authorization` header value into `(scheme_lowercased, rest_original_case)`.
+///
+/// Lowercases only the scheme prefix for comparison so that the returned token
+/// preserves its original case — important for tokens with mixed-case bytes.
+fn parse_auth_scheme(value: &str) -> Option<(&'static str, &str)> {
+    const SCHEMES: &[&str] = &["bearer ", "token ", "basic "];
+    let bytes = value.as_bytes();
+    for scheme in SCHEMES {
+        if bytes.len() >= scheme.len()
+            && bytes[..scheme.len()].eq_ignore_ascii_case(scheme.as_bytes())
+        {
+            return Some((scheme.trim_end(), value[scheme.len()..].trim()));
+        }
+    }
+    None
+}
+
 pub fn extract_candidate_tokens(req: &Request<Body>) -> Vec<String> {
-    let mut candidates = Vec::new();
+    let mut candidates: Vec<String> = Vec::new();
+    let push = |c: String, list: &mut Vec<String>| {
+        if !c.is_empty() && !list.contains(&c) {
+            list.push(c);
+        }
+    };
     for value in req.headers().values() {
-        if let Ok(s) = value.to_str() {
-            let lower = s.to_lowercase();
-            let candidate = if let Some(rest) = lower.strip_prefix("bearer ") {
-                Some(rest.trim().to_string())
-            } else {
-                // `gh` CLI sends `Authorization: token <value>` (GitHub legacy format)
-                lower
-                    .strip_prefix("token ")
-                    .map(|rest| rest.trim().to_string())
-            };
-            if let Some(c) = candidate {
-                if !candidates.contains(&c) {
-                    candidates.push(c);
+        let Ok(s) = value.to_str() else { continue };
+        let Some((scheme, rest)) = parse_auth_scheme(s) else {
+            continue;
+        };
+        match scheme {
+            "bearer" | "token" => push(rest.to_string(), &mut candidates),
+            "basic" => {
+                let Ok(decoded) = BASE64_STANDARD.decode(rest) else {
+                    continue;
+                };
+                let Ok(text) = std::str::from_utf8(&decoded) else {
+                    continue;
+                };
+                // git/gh credential helpers vary on which slot holds the token
+                // (`x-access-token:<tok>`, `<tok>:x-oauth-basic`, `oauth2:<tok>`,
+                // …). Try both halves; non-token values just miss the registry.
+                if let Some((u, p)) = text.split_once(':') {
+                    push(u.to_string(), &mut candidates);
+                    push(p.to_string(), &mut candidates);
+                } else {
+                    push(text.to_string(), &mut candidates);
                 }
             }
+            _ => {}
         }
     }
     candidates
@@ -84,11 +116,14 @@ pub async fn auth_middleware(
 ) -> Response {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
-    let prefix = path.trim_start_matches('/').split('/').next().unwrap_or("");
-    let canonical = state.canonical_route_key(prefix);
-    let sources: &[CredentialSource] = state
-        .route_entry(prefix)
-        .map(|entry| entry.credential_sources.as_slice())
+    let resolved = state.resolve(&path);
+    let canonical = resolved
+        .as_ref()
+        .map(|r| r.entry.canonical_route.as_str())
+        .unwrap_or_else(|| path.trim_start_matches('/').split('/').next().unwrap_or(""));
+    let sources: &[CredentialSource] = resolved
+        .as_ref()
+        .map(|r| r.entry.credential_sources.as_slice())
         .unwrap_or(&[]);
 
     // 1. Try registry tokens first
@@ -123,6 +158,21 @@ pub async fn auth_middleware(
             req.extensions_mut().insert(auth);
             return next.run(req).await;
         }
+    }
+
+    // Git smart-HTTP uses 401 + WWW-Authenticate to challenge credentials;
+    // 407 is treated as a proxy error and git does not retry with credentials.
+    if crate::profile::is_git_smart_http(&path) {
+        warn!("{} {} — 401 missing or invalid token (git smart-HTTP)", method, path);
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(
+                axum::http::header::WWW_AUTHENTICATE,
+                axum::http::HeaderValue::from_static(r#"Basic realm="coco-gateway""#),
+            )],
+            "401 Unauthorized",
+        )
+            .into_response();
     }
 
     warn!("{} {} — 407 missing or invalid token", method, path);

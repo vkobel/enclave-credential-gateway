@@ -52,10 +52,129 @@ mod auth_tests {
     }
 }
 
+/// Unit tests for `extract_candidate_tokens` covering Bearer/token/Basic
+/// schemes, mixed-case token preservation, and malformed inputs.
+mod extract_candidate_tokens_tests {
+    use axum::{body::Body, http::Request};
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use coco_gateway::auth::extract_candidate_tokens;
+
+    fn req_with_auth(value: &str) -> Request<Body> {
+        Request::builder()
+            .uri("/")
+            .header("authorization", value)
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    fn b64(s: &str) -> String {
+        STANDARD.encode(s)
+    }
+
+    #[test]
+    fn bearer_extracts_token() {
+        let r = req_with_auth("Bearer ccgw_abc");
+        let cands = extract_candidate_tokens(&r);
+        assert!(cands.contains(&"ccgw_abc".to_string()));
+    }
+
+    #[test]
+    fn token_scheme_extracts_token() {
+        let r = req_with_auth("token gh-pat");
+        let cands = extract_candidate_tokens(&r);
+        assert!(cands.contains(&"gh-pat".to_string()));
+    }
+
+    #[test]
+    fn bearer_preserves_mixed_case() {
+        let r = req_with_auth("Bearer ccgw_AbCdEf");
+        let cands = extract_candidate_tokens(&r);
+        assert_eq!(cands, vec!["ccgw_AbCdEf".to_string()]);
+    }
+
+    #[test]
+    fn token_scheme_preserves_mixed_case() {
+        let r = req_with_auth("Token Gh_AbCdEf");
+        let cands = extract_candidate_tokens(&r);
+        assert_eq!(cands, vec!["Gh_AbCdEf".to_string()]);
+    }
+
+    #[test]
+    fn basic_decodes_token_in_password_slot() {
+        let r = req_with_auth(&format!("Basic {}", b64("x-access-token:ccgw_AbC")));
+        let cands = extract_candidate_tokens(&r);
+        assert!(cands.contains(&"ccgw_AbC".to_string()));
+    }
+
+    #[test]
+    fn basic_decodes_token_in_username_slot() {
+        let r = req_with_auth(&format!("Basic {}", b64("ccgw_AbC:x-oauth-basic")));
+        let cands = extract_candidate_tokens(&r);
+        assert!(cands.contains(&"ccgw_AbC".to_string()));
+    }
+
+    #[test]
+    fn basic_preserves_mixed_case() {
+        let r = req_with_auth(&format!("Basic {}", b64("x:ccgw_AbCdEf")));
+        let cands = extract_candidate_tokens(&r);
+        assert!(cands.contains(&"ccgw_AbCdEf".to_string()));
+    }
+
+    #[test]
+    fn basic_pushes_both_halves() {
+        let r = req_with_auth(&format!("Basic {}", b64("oauth2:ccgw_xyz")));
+        let cands = extract_candidate_tokens(&r);
+        assert!(cands.contains(&"oauth2".to_string()));
+        assert!(cands.contains(&"ccgw_xyz".to_string()));
+    }
+
+    #[test]
+    fn basic_no_colon_pushes_whole_string() {
+        let r = req_with_auth(&format!("Basic {}", b64("just-a-token")));
+        let cands = extract_candidate_tokens(&r);
+        assert!(cands.contains(&"just-a-token".to_string()));
+    }
+
+    #[test]
+    fn basic_malformed_b64_does_not_panic() {
+        let r = req_with_auth("Basic !!!not-base64!!!");
+        let cands = extract_candidate_tokens(&r);
+        assert!(cands.is_empty());
+    }
+
+    #[test]
+    fn basic_non_utf8_payload_is_skipped() {
+        // Valid base64 of bytes that are not valid UTF-8.
+        let payload = STANDARD.encode([0xff, 0xfe, 0xfd]);
+        let r = req_with_auth(&format!("Basic {}", payload));
+        let cands = extract_candidate_tokens(&r);
+        assert!(cands.is_empty());
+    }
+
+    #[test]
+    fn unknown_scheme_yields_no_candidate() {
+        let r = req_with_auth("Digest something");
+        let cands = extract_candidate_tokens(&r);
+        assert!(cands.is_empty());
+    }
+
+    #[test]
+    fn duplicate_candidates_are_deduplicated() {
+        let r = Request::builder()
+            .uri("/")
+            .header("authorization", "Bearer ccgw_dup")
+            .header("x-other", "Bearer ccgw_dup")
+            .body(Body::empty())
+            .unwrap();
+        let cands = extract_candidate_tokens(&r);
+        assert_eq!(cands.iter().filter(|c| c.as_str() == "ccgw_dup").count(), 1);
+    }
+}
+
 /// Profile loading and schema tests
 mod profile_tests {
     use coco_gateway::profile::{load_embedded_routes, try_load_routes_from_str};
-    use coco_gateway::{InjectMode, ProfileRoute, RouteEntry};
+    use coco_gateway::{InjectMode, ProfileRoute, RouteEntry, RouteMatcher};
 
     #[test]
     fn test_credential_sources_parsing() {
@@ -196,6 +315,73 @@ mod profile_tests {
     }
 
     #[test]
+    fn test_embedded_github_expands_into_api_and_git_routes() {
+        let routes = load_embedded_routes();
+        let github = routes.iter().find(|(key, _)| key == "github").unwrap();
+        let git = routes
+            .iter()
+            .find(|(_, e)| e.matcher == RouteMatcher::GitSmartHttp && e.canonical_route == "github")
+            .expect("expected an expanded git_protocol entry for github");
+
+        assert_eq!(github.1.matcher, RouteMatcher::Prefix);
+        assert_eq!(github.1.upstream, "https://api.github.com");
+        assert_eq!(git.1.upstream, "https://github.com");
+        assert_eq!(git.1.canonical_route, "github");
+        assert_eq!(
+            git.1.credential_sources.len(),
+            github.1.credential_sources.len()
+        );
+        assert!(git.1.strip_prefix.is_none());
+    }
+
+    #[test]
+    fn test_git_protocol_field_optional_for_other_routes() {
+        let routes = load_embedded_routes();
+        for (_, entry) in &routes {
+            if entry.canonical_route != "github" {
+                assert_eq!(
+                    entry.matcher,
+                    RouteMatcher::Prefix,
+                    "non-github routes should not have git_protocol matcher"
+                );
+            }
+        }
+        // Sanity: at least one non-github route exists and loads cleanly.
+        assert!(routes.iter().any(|(k, _)| k == "openai"));
+        assert!(routes.iter().any(|(k, _)| k == "anthropic"));
+    }
+
+    #[test]
+    fn test_git_protocol_deserializes_from_profile() {
+        let routes = try_load_routes_from_str(
+            "test",
+            r#"{
+                "routes": {
+                    "gh": {
+                        "upstream": "https://api.example.com",
+                        "git_protocol": { "upstream": "https://example.com" },
+                        "credential_sources": [
+                            {"env": "GH_TOKEN", "inject_header": "Authorization"}
+                        ]
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let prefix_entry = routes
+            .iter()
+            .find(|(_, e)| e.canonical_route == "gh" && e.matcher == RouteMatcher::Prefix)
+            .unwrap();
+        let git_entry = routes
+            .iter()
+            .find(|(_, e)| e.canonical_route == "gh" && e.matcher == RouteMatcher::GitSmartHttp)
+            .unwrap();
+        assert_eq!(prefix_entry.1.upstream, "https://api.example.com");
+        assert_eq!(git_entry.1.upstream, "https://example.com");
+    }
+
+    #[test]
     fn test_profile_routes_are_returned_in_deterministic_order() {
         let routes = try_load_routes_from_str(
             "test",
@@ -216,6 +402,147 @@ mod profile_tests {
 
         let keys: Vec<_> = routes.into_iter().map(|(key, _)| key).collect();
         assert_eq!(keys, vec!["alpha", "zeta"]);
+    }
+}
+
+/// `is_git_smart_http` matcher tests.
+mod git_matcher_tests {
+    use coco_gateway::is_git_smart_http;
+
+    #[test]
+    fn matches_info_refs() {
+        assert!(is_git_smart_http("/octocat/hello.git/info/refs"));
+    }
+
+    #[test]
+    fn matches_git_upload_pack() {
+        assert!(is_git_smart_http("/octocat/hello.git/git-upload-pack"));
+    }
+
+    #[test]
+    fn matches_git_receive_pack() {
+        assert!(is_git_smart_http("/octocat/hello.git/git-receive-pack"));
+    }
+
+    #[test]
+    fn rejects_dumb_http_objects_path() {
+        assert!(!is_git_smart_http(
+            "/octocat/hello.git/objects/pack/pack-abc.idx"
+        ));
+    }
+
+    #[test]
+    fn rejects_api_path() {
+        assert!(!is_git_smart_http("/api/v3/repos/foo/bar"));
+    }
+
+    #[test]
+    fn rejects_single_segment() {
+        assert!(!is_git_smart_http("/octocat.git/info/refs"));
+    }
+
+    #[test]
+    fn rejects_too_many_segments() {
+        assert!(!is_git_smart_http("/a/b/c.git/info/refs"));
+    }
+
+    #[test]
+    fn rejects_no_dot_git() {
+        assert!(!is_git_smart_http("/octocat/hello/info/refs"));
+    }
+
+    #[test]
+    fn rejects_empty_owner() {
+        assert!(!is_git_smart_http("//hello.git/info/refs"));
+    }
+
+    #[test]
+    fn rejects_empty_repo() {
+        assert!(!is_git_smart_http("/octocat/.git/info/refs"));
+    }
+}
+
+/// Tests for `resolve_route` covering both the prefix matcher and the new
+/// git-smart-http matcher.
+mod resolver_tests {
+    use coco_gateway::profile::{load_embedded_routes, try_load_routes_from_str};
+    use coco_gateway::{resolve_route, RouteMatcher};
+
+    #[test]
+    fn resolve_prefix_match_returns_existing_entry() {
+        let routes = load_embedded_routes();
+        let r = resolve_route(&routes, "/openai/v1/chat").unwrap();
+        assert_eq!(r.entry.canonical_route, "openai");
+        assert_eq!(r.upstream_path, "/v1/chat");
+        assert_eq!(r.entry.matcher, RouteMatcher::Prefix);
+    }
+
+    #[test]
+    fn resolve_prefix_match_strips_alias_v3() {
+        let routes = load_embedded_routes();
+        let r = resolve_route(&routes, "/api/v3/user").unwrap();
+        assert_eq!(r.entry.canonical_route, "github");
+        assert_eq!(r.upstream_path, "/user");
+    }
+
+    #[test]
+    fn resolve_prefix_match_with_root_path() {
+        let routes = load_embedded_routes();
+        let r = resolve_route(&routes, "/openai").unwrap();
+        assert_eq!(r.upstream_path, "/");
+    }
+
+    #[test]
+    fn resolve_git_smart_http_uses_full_path_and_github_upstream() {
+        let routes = load_embedded_routes();
+        let r = resolve_route(&routes, "/vkobel/hello-attested.git/info/refs").unwrap();
+        assert_eq!(r.entry.canonical_route, "github");
+        assert_eq!(r.entry.matcher, RouteMatcher::GitSmartHttp);
+        assert_eq!(r.entry.upstream, "https://github.com");
+        assert_eq!(r.upstream_path, "/vkobel/hello-attested.git/info/refs");
+    }
+
+    #[test]
+    fn resolve_unknown_path_returns_none() {
+        let routes = load_embedded_routes();
+        assert!(resolve_route(&routes, "/no-such-route/x").is_none());
+        assert!(resolve_route(&routes, "/vkobel/hello-attested").is_none());
+    }
+
+    #[test]
+    fn resolve_does_not_match_synthetic_git_key_via_prefix() {
+        // The synthetic `__git__github` key must not be reachable via the
+        // prefix path; only the GitSmartHttp matcher should match.
+        let routes = load_embedded_routes();
+        assert!(resolve_route(&routes, "/__git__github/foo").is_none());
+    }
+
+    #[test]
+    fn resolve_skips_unknown_matcher_for_prefix_path() {
+        // Synthetic profile where a key collides with a non-prefix matcher.
+        // Only GitSmartHttp can satisfy the git matcher; an unrelated path
+        // must not accidentally match it.
+        let routes = try_load_routes_from_str(
+            "test",
+            r#"{
+                "routes": {
+                    "gh": {
+                        "upstream": "https://api.example.com",
+                        "git_protocol": { "upstream": "https://example.com" },
+                        "credential_sources": [
+                            {"env": "GH_TOKEN", "inject_header": "Authorization"}
+                        ]
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let r = resolve_route(&routes, "/gh/anything").unwrap();
+        assert_eq!(r.entry.upstream, "https://api.example.com");
+
+        let r = resolve_route(&routes, "/foo/bar.git/info/refs").unwrap();
+        assert_eq!(r.entry.upstream, "https://example.com");
     }
 }
 

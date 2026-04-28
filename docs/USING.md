@@ -158,6 +158,8 @@ gh repo list
 
 `GH_HOST` tells `gh` to route all API requests through the gateway instead of directly to `api.github.com`. `gh` appends `/api/v3/` to any custom host; GitHub's built-in `api` compatibility alias strips `/v3` before forwarding to `api.github.com` with the real `GITHUB_TOKEN`.
 
+`gh repo clone` shells out to `git`, which authenticates the smart-HTTP transport with HTTP Basic auth. The gateway recognises requests of the form `/<owner>/<repo>.git/{info/refs,git-upload-pack,git-receive-pack}` and proxies them to `github.com` (the git host, not the API host). Tokens scoped to `github` cover both endpoints — no extra scope is needed.
+
 > **Note:** `GH_HOST` is a hostname, not a full URL. `gh` treats any `GH_HOST` other than `github.com` as a GitHub Enterprise host and reads `GH_ENTERPRISE_TOKEN` (not `GH_TOKEN`). `coco env` exports both so `gh` works for the gateway host and `GH_TOKEN` stays available for curl/manual examples.
 
 ---

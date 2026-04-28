@@ -10,6 +10,7 @@ use axum::{
     http::{HeaderName, HeaderValue, Request, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use http_body_util::BodyExt;
 use std::sync::Arc;
 use tracing::{error, info, warn};
@@ -18,14 +19,14 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
     let path = req.uri().path().to_string();
     let method = req.method().clone();
 
-    let stripped = path.trim_start_matches('/');
-    let prefix = stripped.split('/').next().unwrap_or("");
-    let entry = match state.route_entry(prefix) {
-        Some(entry) => entry,
+    let resolved_route = match state.resolve(&path) {
+        Some(r) => r,
         None => {
             return (StatusCode::NOT_FOUND, "404 Not Found").into_response();
         }
     };
+    let entry = resolved_route.entry;
+    let upstream_path = resolved_route.upstream_path;
 
     let phantom_auth = req
         .extensions()
@@ -41,23 +42,12 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
     let (src, credential) = match resolved {
         Some(r) => r,
         None => {
-            warn!("No credential available for route '{}'", prefix);
+            warn!(
+                "No credential available for route '{}'",
+                entry.canonical_route
+            );
             return (StatusCode::SERVICE_UNAVAILABLE, "503 Service Unavailable").into_response();
         }
-    };
-
-    let upstream_path = &path[prefix.len() + 1..];
-    let upstream_path = if let Some(sp) = &entry.strip_prefix {
-        upstream_path
-            .strip_prefix(sp.as_str())
-            .unwrap_or(upstream_path)
-    } else {
-        upstream_path
-    };
-    let upstream_path = if upstream_path.is_empty() {
-        "/"
-    } else {
-        upstream_path
     };
 
     let query = req
@@ -92,7 +82,12 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
 
     // Only inject credential into headers for Header mode
     if entry.inject_mode == InjectMode::Header {
-        let inject_value = src.format.replace("{}", &credential);
+        let inject_value = if let Some(ref user) = src.basic_user {
+            let encoded = BASE64_STANDARD.encode(format!("{}:{}", user, credential));
+            format!("Basic {}", encoded)
+        } else {
+            src.format.replace("{}", &credential)
+        };
         if let Ok(header_name) = HeaderName::from_bytes(src.inject_header.as_bytes()) {
             headers.insert(
                 header_name,

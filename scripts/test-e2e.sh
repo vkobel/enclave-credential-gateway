@@ -202,6 +202,60 @@ section "Routing edge cases"
 gw_request GET /unknown-route/
 [[ "$GW_STATUS" == "404" ]] && pass "Unknown route → 404" || fail "Unknown route → expected 404, got $GW_STATUS"
 
+section "Auth: HTTP Basic scheme"
+
+# `git` over HTTPS authenticates with `Authorization: Basic base64(user:token)`,
+# not Bearer. The gateway should decode Basic and validate either half against
+# the registry. We assert auth passes (status != 407/401) — the actual upstream
+# response depends on whether HTTPBIN_TOKEN is set.
+basic_value=$(printf 'x-access-token:%s' "$ALL_TOKEN" | base64)
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Basic ${basic_value}" \
+  "http://localhost:${GATEWAY_PORT}/httpbin/headers" 2>/dev/null)
+case "$status" in
+  407|401) fail "Basic auth (token in password slot) → got $status, expected auth to pass" ;;
+  *)       pass "Basic auth (token in password slot) accepted (status $status)" ;;
+esac
+
+basic_value=$(printf '%s:x-oauth-basic' "$ALL_TOKEN" | base64)
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Basic ${basic_value}" \
+  "http://localhost:${GATEWAY_PORT}/httpbin/headers" 2>/dev/null)
+case "$status" in
+  407|401) fail "Basic auth (token in username slot) → got $status, expected auth to pass" ;;
+  *)       pass "Basic auth (token in username slot) accepted (status $status)" ;;
+esac
+
+section "Route: github (git smart-HTTP)"
+
+# Resolves via the GitSmartHttp matcher, not a path prefix. The token is
+# scoped to "github", which must cover both API and git endpoints because they
+# share the same canonical_route.
+git_path="/octocat/Spoon-Knife.git/info/refs?service=git-upload-pack"
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Bearer ${GITHUB_SCOPED_TOKEN}" \
+  "http://localhost:${GATEWAY_PORT}${git_path}" 2>/dev/null)
+case "$status" in
+  407|404) fail "git smart-HTTP routing → got $status, expected the gateway to recognise the path" ;;
+  *)       pass "git smart-HTTP path resolved through gateway (status $status)" ;;
+esac
+
+# Same path, no auth — must 401 (git paths return 401 + WWW-Authenticate so git
+# retries with credentials; 407 would cause git to bail without retrying).
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  "http://localhost:${GATEWAY_PORT}${git_path}" 2>/dev/null)
+[[ "$status" == "401" ]] \
+  && pass "git smart-HTTP without auth → 401" \
+  || fail "git smart-HTTP without auth → expected 401, got $status"
+
+# Same path, out-of-scope token — must 403.
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Bearer ${HTTPBIN_SCOPED_TOKEN}" \
+  "http://localhost:${GATEWAY_PORT}${git_path}" 2>/dev/null)
+[[ "$status" == "403" ]] \
+  && pass "git smart-HTTP with out-of-scope token → 403" \
+  || fail "git smart-HTTP with out-of-scope token → expected 403, got $status"
+
 section "CLI activation"
 
 CLI_HOME=$(mktemp -d)
