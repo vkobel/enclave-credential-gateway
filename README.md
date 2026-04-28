@@ -1,76 +1,226 @@
 # CoCo Credential Gateway
 
-CoCo is a credential proxy for AI agents and developer tools. Clients send a scoped phantom token to the gateway; the gateway validates it, checks route scope, strips the phantom, and injects the real upstream credential server-side.
+CoCo is a credential proxy for AI agents and developer tools. Clients use scoped CoCo tokens (`ccgw_...`) instead of real vendor keys. The gateway validates the CoCo token, checks route scope, removes the client credential, and injects the real upstream credential server-side.
 
-Use it when you want Claude Code, Codex, OpenAI-compatible SDKs, `gh`, or other tools to call vendor APIs without putting real API keys on the agent host.
+Use it when tools like `gh`, Git, Codex, Claude Code, OpenAI-compatible SDKs, OpenCode, Ollama, or curl scripts need vendor APIs without placing real API keys on the machine running the tool.
 
-## Quickstart
+## Local Gateway Deployment
+
+This example runs the gateway locally with Docker Compose and Caddy TLS. It uses `https://localhost` because `gh` treats custom GitHub hosts as HTTPS GitHub Enterprise hosts.
+
+Prerequisites:
+
+- Docker with Compose
+- Rust/Cargo, for the local `coco` CLI
+- `gh`, `git`, `curl`, and `jq`
+- A real GitHub token in `GITHUB_TOKEN` for the gateway to inject upstream
+
+### 1. Start the Gateway
+
+Run this from the repository root:
 
 ```bash
-# Build the CLI.
-cargo build --release -p coco-cli
-cp target/release/coco /usr/local/bin/coco
+export COCO_ADMIN_TOKEN="$(openssl rand -hex 32)"
+export GITHUB_TOKEN=ghp_...          # real upstream GitHub token, kept server-side
+export HTTPBIN_TOKEN=anything        # optional, useful for route smoke tests
 
-# Start a local gateway.
-export COCO_ADMIN_TOKEN=$(openssl rand -hex 32)
-export HTTPBIN_TOKEN=anything
-export GITHUB_TOKEN=ghp_...        # optional
-export OPENAI_API_KEY=sk-...       # optional
-export ANTHROPIC_API_KEY=sk-ant-... # optional
 docker compose up -d --build
+```
+
+What these values do:
+
+- `COCO_ADMIN_TOKEN` protects the gateway admin API. Save it; the CLI needs it to create and revoke CoCo tokens.
+- `GITHUB_TOKEN` is the real GitHub credential. Clients never receive it; the gateway injects it only when forwarding `github` traffic upstream.
+- `HTTPBIN_TOKEN` enables the `httpbin` route for simple testing.
+- Compose stores the token registry in the `coco-data` volume at `/data/tokens.json`.
+- Caddy listens on local ports `80` and `443` and reverse-proxies to `coco-gateway:8080`.
+
+Check that the services are up:
+
+```bash
+docker compose ps
+curl -k https://localhost/health
+```
+
+`curl -k` is only for the first check, before trusting Caddy's local certificate.
+
+### 2. Trust Caddy's Local Certificate
+
+Caddy serves `https://localhost` with its local CA by default. Trust that CA once so `curl`, `gh`, and Git accept the gateway certificate.
+
+```bash
+docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt /tmp/coco-caddy-root.crt
+```
+
+On macOS:
+
+```bash
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain /tmp/coco-caddy-root.crt
+```
+
+On Debian/Ubuntu:
+
+```bash
+sudo cp /tmp/coco-caddy-root.crt /usr/local/share/ca-certificates/coco-caddy-root.crt
+sudo update-ca-certificates
+```
+
+Now verify without `-k`:
+
+```bash
+curl https://localhost/health
+```
+
+For a real hostname, set `COCO_DOMAIN=gw.example.com` before `docker compose up`. Caddy will then request a public certificate for that name.
+
+### 3. Install and Configure the CLI
+
+Build the CLI and put it on your `PATH`. The Git credential helper path used by `coco tool env gh` relies on `coco` being executable from the shell where Git runs.
+
+```bash
+cargo build --release -p coco-cli
+export PATH="$PWD/target/release:$PATH"
 ```
 
 Create `~/.config/coco/config.toml`:
 
+```bash
+mkdir -p ~/.config/coco
+cat > ~/.config/coco/config.toml <<EOF
+gateway_url = "https://localhost"
+admin_token = "$COCO_ADMIN_TOKEN"
+EOF
+```
+
+`gateway_url` is the public URL clients call. `admin_token` is only for token administration; it is not sent to upstream vendors.
+
+## GitHub CLI and Git
+
+This is the full local `gh` flow: create a GitHub-scoped CoCo token, activate the shell environment, and use both `gh` and plain Git through the gateway.
+
+### 1. Create a CoCo Token for GitHub
+
+```bash
+coco token create --name gh-local --scope github
+```
+
+The CLI sends an authenticated `POST /admin/tokens` request to the local gateway. The gateway stores only a hash of the new CoCo token in its registry. The CLI saves the returned token under `[tokens.gh-local]` in `~/.config/coco/config.toml`.
+
+You can inspect the saved client config:
+
+```bash
+sed -n '/tokens.gh-local/,$p' ~/.config/coco/config.toml
+```
+
+The saved token is the `ccgw_...` client credential. It is scoped to `github`, so it can use GitHub REST routes, the `gh` `/api/v3/...` compatibility route, and Git smart-HTTP clone/fetch/push routes. It cannot access routes like `openai` or `anthropic`.
+
+### 2. Activate `gh` and Git in the Current Shell
+
+```bash
+eval "$(coco tool env gh gh-local)"
+```
+
+That generated shell config does four things:
+
+- `GH_HOST=localhost` tells `gh` to send GitHub API calls to the local gateway host.
+- `GH_ENTERPRISE_TOKEN=ccgw_...` is the token `gh` actually reads for custom hosts.
+- `GH_TOKEN=ccgw_...` is also exported for scripts and manual curl examples.
+- `GIT_CONFIG_COUNT` plus `GIT_CONFIG_KEY_*` / `GIT_CONFIG_VALUE_*` install a session-scoped Git credential helper for `https://localhost`.
+
+The Git env config is intentionally in the shell instead of `~/.gitconfig`: it affects only this terminal session and only the gateway host. Re-running the `eval` is safe; the adapter replaces its existing gateway helper entries instead of growing duplicate config entries.
+
+### 3. Use `gh` and Git
+
+```bash
+gh api user
+gh repo list
+gh repo clone OWNER/REPO
+
+cd REPO
+git fetch
+git pull
+git push
+```
+
+`gh` REST calls go to `https://localhost/api/v3/...`; the gateway strips `/v3` and forwards them to `https://api.github.com` with the real `GITHUB_TOKEN`.
+
+`gh repo clone` shells out to Git. Git talks to paths like `https://localhost/OWNER/REPO.git/info/refs`; the gateway forwards those smart-HTTP requests to `https://github.com`. The generated Git credential helper supplies the CoCo token as HTTP Basic auth only for the gateway host.
+
+Confirm that remotes stay token-free:
+
+```bash
+git remote -v
+```
+
+The remote should contain `https://localhost/OWNER/REPO.git`, not a `ccgw_...` token and not the real `GITHUB_TOKEN`.
+
+## Other Tool Examples
+
+For longer per-tool setup, see [docs/USING.md](./docs/USING.md).
+
+### Codex
+
+```bash
+coco token create --name codex-local --scope openai
+coco tool install codex codex-local
+codex
+```
+
+`coco env <name> --codex` remains a quiet compatibility path. Prefer `coco tool install codex <name>` in new scripts.
+
+### Generic SDKs and curl
+
+```bash
+coco token create --name sdk-local --scope openai
+eval "$(coco env sdk-local)"
+
+curl "$OPENAI_BASE_URL/v1/models" \
+  -H "Authorization: Bearer $OPENAI_API_KEY"
+```
+
+The API key value is the CoCo token. The gateway swaps it for the real upstream key before forwarding.
+
+## Use an Existing Gateway
+
+If someone else operates the gateway, you only need:
+
+- `gateway_url`, for example `https://gw.example.com`
+- a CoCo token, for example `ccgw_...`
+
+Install the CLI, then create `~/.config/coco/config.toml`:
+
 ```toml
-gateway_url = "http://localhost:8080"
-admin_token = "<COCO_ADMIN_TOKEN>"
+gateway_url = "https://gw.example.com"
+
+[tokens.laptop]
+token = "ccgw_..."
+scope = ["github", "openai", "anthropic"]
 ```
 
-Create and use a scoped phantom token:
+The local `scope` list tells the CLI which environment variables and tool adapters to render. It should match the scopes granted by the gateway. An empty list means unrestricted.
+
+Then activate the tool you need:
 
 ```bash
-coco token create --name laptop --scope github,httpbin
-eval $(coco env laptop)
-
-curl http://localhost:8080/httpbin/bearer \
-  -H "Authorization: Bearer $GH_TOKEN"
+eval "$(coco tool env gh laptop)"
+coco tool install codex laptop
+eval "$(coco env laptop)"
 ```
 
-For remote TLS, set `COCO_DOMAIN=gw.example.com` before `docker compose up -d --build`; Caddy terminates HTTPS and proxies to the gateway.
+## Routes
 
-### Local HTTPS trust (dev only)
+Built-in routes are defined in [profiles/routes.json](./profiles/routes.json) and embedded into the gateway binary at build time.
 
-Tools like `gh` that force HTTPS for custom hosts will hit Caddy's self-signed certificate for `localhost`. Trust Caddy's local CA once and all subsequent requests work without certificate errors:
+Token scopes use the top-level route key. Empty scope is unrestricted and allows all current and future routes. GitHub also owns an `/api/v3/...` compatibility alias for `gh`; it scopes as `github` and strips `/v3` before forwarding. Git smart-HTTP paths also scope as `github` and proxy to `github.com`.
 
-```bash
-# Extract Caddy's root CA from its data volume
-docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt /tmp/caddy-root.crt
-
-# macOS — trust system-wide
-sudo security add-trusted-cert -d -r trustRoot \
-  -k /Library/Keychains/System.keychain /tmp/caddy-root.crt
-
-# Linux (Debian/Ubuntu)
-# sudo cp /tmp/caddy-root.crt /usr/local/share/ca-certificates/caddy-local.crt
-# sudo update-ca-certificates
-```
-
-This is only needed for local development. Production deployments use `COCO_DOMAIN` with a real certificate.
-
-## Route Definitions
-
-The built-in routes are defined in [profiles/routes.json](./profiles/routes.json). That file is embedded into the gateway binary at build time; runtime route overrides are intentionally not supported yet.
-
-Token scopes use the top-level route key. Empty scope is unrestricted and allows all current and future routes. GitHub also owns an `/api/v3/...` compatibility alias for `gh`; it scopes as `github` and strips `/v3` before forwarding. The git smart-HTTP path (`/<owner>/<repo>.git/...`) also scopes as `github` and proxies to `github.com` so `gh repo clone` works through the gateway.
-
-| Path prefix | Scope | Upstream | Credential env | Injection |
+| Path prefix | Scope | Upstream | Gateway credential env | Injection |
 |---|---|---|---|---|
 | `/openai/...` | `openai` | `https://api.openai.com` | `OPENAI_API_KEY` | `Authorization: Bearer ...` |
 | `/anthropic/...` | `anthropic` | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` | OAuth tokens as `Authorization: Bearer ...`, API keys as `x-api-key` |
 | `/github/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` | `Authorization: Bearer ...` |
 | `/api/v3/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` | `gh` compatibility route; strips route-relative `/v3` |
-| `/<owner>/<repo>.git/{info/refs,git-upload-pack,git-receive-pack}` | `github` | `https://github.com` | `GITHUB_TOKEN` | git smart-HTTP for `gh repo clone`; accepts HTTP Basic auth |
+| `/<owner>/<repo>.git/{info/refs,git-upload-pack,git-receive-pack}` | `github` | `https://github.com` | `GITHUB_TOKEN` | Git smart-HTTP; accepts HTTP Basic auth |
 | `/httpbin/...` | `httpbin` | `https://httpbin.org` | `HTTPBIN_TOKEN` | `Authorization: Bearer ...` |
 | `/ollama/...` | `ollama` | `https://127.0.0.1:11434` | `OLLAMA_API_KEY` | `Authorization: Bearer ...` |
 | `/telegram/...` | `telegram` | `https://api.telegram.org` | `TELEGRAM_BOT_TOKEN` | URL path token injection |
@@ -102,10 +252,6 @@ Route manifest syntax is route-first:
 }
 ```
 
-The top-level route key is both the normal URL prefix and the token scope. For example, `github` handles `/github/...` and a token scoped to `github` can call it. Aliases are compatibility path prefixes owned by a top-level route; GitHub's `api` alias means `/api/v3/user` scopes as `github`, strips `/v3`, and forwards `/user` to `https://api.github.com`.
-
-`credential_sources` are tried in order. The first env var that exists and matches its optional `prefix` is selected. In normal `header` mode, the gateway removes the client's phantom token header and injects the real credential into `inject_header` after applying `format`; `{}` is replaced with the env value. Most routes omit `inject_mode` because `header` is the default. `url_path` mode is only for APIs such as Telegram where the token is part of the path: `/telegram/sendMessage` becomes `https://api.telegram.org/bot<TOKEN>/sendMessage`; set `url_path_prefix` only with that mode.
-
 Supported fields:
 
 | Field | Purpose |
@@ -116,37 +262,16 @@ Supported fields:
 | `strip_prefix` | Alias path prefix to remove before forwarding |
 | `inject_mode` | `header` or `url_path`; defaults to `header` |
 | `url_path_prefix` | Prefix used by `url_path` credential injection |
-| `git_protocol` | Optional companion route that proxies git smart-HTTP requests (`/<owner>/<repo>.git/...`) to a separate `upstream`. Currently used only by `github`; shares scope and credentials with the parent route. |
-
-## CLI
-
-```bash
-# Token registry.
-coco token create --name laptop --scope openai,anthropic,github
-coco token ls
-coco token revoke laptop
-
-# Generic shell activation.
-eval $(coco env laptop)
-
-# Tool-specific adapters.
-eval $(coco tool env gh laptop)
-coco tool install codex laptop
-eval $(coco tool env opencode laptop)
-```
-
-`coco env <name> --codex` remains a quiet compatibility path: it writes `~/.codex/config.toml` only when the token can access `openai`; otherwise it leaves Codex config untouched. Prefer `coco tool install codex <name>` in new scripts.
-
-For copy-paste setup per client, use [docs/USING.md](./docs/USING.md).
+| `git_protocol` | Optional companion route that proxies git smart-HTTP requests to a separate upstream. Currently used only by `github`; shares scope and credentials with the parent route. |
 
 ## How It Works
 
 ```text
-client sends phantom token -> gateway validates token and route scope
-                           -> gateway selects /<route>/ profile
-                           -> gateway removes phantom credential
-                           -> gateway injects real server-side credential
-                           -> upstream API receives only the real credential
+client sends CoCo token -> gateway validates token and route scope
+                         -> gateway selects the route profile
+                         -> gateway removes the client credential
+                         -> gateway injects the real server-side credential
+                         -> upstream API receives only the real credential
 ```
 
 Status codes:
@@ -154,35 +279,12 @@ Status codes:
 | Code | Meaning |
 |---|---|
 | `200` | Upstream request succeeded |
-| `407` | Missing, revoked, or invalid phantom token |
+| `407` | Missing, revoked, or invalid CoCo token |
 | `403` | Token is valid but not scoped for this route |
 | `404` | Unknown route prefix |
 | `503` | Route exists but required real credential env var is missing |
 
 `COCO_PHANTOM_TOKEN` is still supported as a legacy single-token fallback, but the registry/admin API path is preferred.
-
-## Configuration
-
-Gateway environment:
-
-| Env var | Required | Default | Purpose |
-|---|---:|---|---|
-| `COCO_ADMIN_TOKEN` | yes | none | Admin API bearer token |
-| `COCO_LISTEN_PORT` | no | `8080` | Gateway listen port |
-| `COCO_TOKENS_FILE` | no | `/data/tokens.json` in compose | Registry storage |
-| `COCO_PHANTOM_TOKEN` | no | none | Legacy single-token fallback |
-| `COCO_DOMAIN` | no | none | Domain for Caddy TLS |
-
-CLI config:
-
-```toml
-gateway_url = "https://gw.example.com"
-admin_token = "<COCO_ADMIN_TOKEN>"
-
-[tokens.laptop]
-token = "ccgw_..."
-scope = ["openai", "github"]
-```
 
 ## Testing
 
@@ -198,7 +300,7 @@ What these do:
 
 - `cargo fmt --check` verifies Rust formatting without changing files.
 - `cargo test --workspace` runs CLI tests plus gateway auth, proxy, registry, admin API, profile parsing, inject-mode, and token-scope tests. Live gateway feature tests are ignored unless explicitly enabled.
-- `./scripts/test-e2e.sh` runs the Docker-backed end-to-end flow: gateway startup, admin token creation, missing/wrong token handling, route-scope denial, revocation, CLI Codex compatibility, and optional upstream credential injection checks.
+- `./scripts/test-e2e.sh` runs the Docker-backed end-to-end flow: gateway startup, admin token creation, missing/wrong token handling, route-scope denial, revocation, CLI activation, and optional upstream credential injection checks.
 
 Run focused package tests while iterating:
 
@@ -207,32 +309,17 @@ cargo test -p coco-gateway
 cargo test -p coco-cli
 ```
 
-Compose-backed e2e:
-
-```bash
-# Minimal run. COCO_ADMIN_TOKEN defaults to test-admin if omitted.
-./scripts/test-e2e.sh
-```
-
-The e2e script tears down the compose project on exit. If port `8080` is occupied by an incompatible local gateway, it falls back to `18080`; override with `COCO_E2E_PORT=<port>`.
-
 Optional live upstream checks:
 
 ```bash
 export HTTPBIN_TOKEN=anything
-./scripts/test-e2e.sh
-
 export OPENAI_API_KEY=sk-...
-./scripts/test-e2e.sh
-
 export ANTHROPIC_API_KEY=sk-ant-api-...
+export GITHUB_TOKEN=ghp_...
 ./scripts/test-e2e.sh
-
-export ANTHROPIC_API_KEY=sk-ant-oat01-...
-COCO_TEST_ANTHROPIC_MODE=oauth ./scripts/test-e2e.sh
 ```
 
-Missing real upstream credentials are skipped, not treated as failures.
+Missing real upstream credentials are skipped, not treated as failures. Live GitHub checks exercise REST calls plus Git clone, push, and pull through the gateway.
 
 Run the ignored live-gateway Rust tests against an already running gateway:
 

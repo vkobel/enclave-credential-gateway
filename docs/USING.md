@@ -1,6 +1,6 @@
 # Using CoCo — Copy-Paste Setup Guide
 
-This guide assumes you have a running gateway (local or remote). If not, see the [README quickstart](../README.md).
+This guide assumes you have a running gateway (local or remote). If not, see the [README deployment section](../README.md#local-gateway-deployment).
 
 ---
 
@@ -21,14 +21,14 @@ gateway_url = "https://gw.example.com"
 admin_token = "..."   # only needed for token management commands
 ```
 
-**3. Create a token:**
+**3. Create or add a token:**
 
 Scope values are route prefixes from your profile. Omit `--scope` to create an unrestricted token that allows all current and future routes.
 
 ```bash
 # Via coco CLI (requires admin_token in config)
 coco token create --name laptop --scope github,httpbin,anthropic,openai,ollama
-# token: ccgw_... ← shown once; add it to config
+# The CLI saves the returned token to ~/.config/coco/config.toml.
 
 # Or directly via curl
 curl -s -X POST https://gw.example.com/admin/tokens \
@@ -41,8 +41,9 @@ curl -s -X POST https://gw.example.com/admin/tokens \
 
 ```toml
 # ~/.config/coco/config.toml
-[tokens]
-laptop = "ccgw_..."
+[tokens.laptop]
+token = "ccgw_..."
+scope = ["github", "httpbin", "anthropic", "openai", "ollama"]
 ```
 
 > Built-in route reference: `github`, `anthropic`, `openai`, `httpbin`, `ollama`, `telegram`, `groq`, `together`, `elevenlabs`. The built-in routes live in the embedded `profiles/routes.json` manifest. GitHub owns an `api` compatibility alias for `gh`; `/api/v3/...` scopes as `github`.
@@ -55,11 +56,7 @@ laptop = "ccgw_..."
 eval $(coco env laptop)
 ```
 
-This sets the generic shell env vars in one shot:
-
-```bash
-eval $(coco env laptop)
-```
+This sets the generic shell env vars in one shot.
 
 For file-backed tools, use the dedicated tool adapters:
 
@@ -159,6 +156,8 @@ gh repo list
 `GH_HOST` tells `gh` to route all API requests through the gateway instead of directly to `api.github.com`. `gh` appends `/api/v3/` to any custom host; GitHub's built-in `api` compatibility alias strips `/v3` before forwarding to `api.github.com` with the real `GITHUB_TOKEN`.
 
 `gh repo clone` shells out to `git`, which authenticates the smart-HTTP transport with HTTP Basic auth. The gateway recognises requests of the form `/<owner>/<repo>.git/{info/refs,git-upload-pack,git-receive-pack}` and proxies them to `github.com` (the git host, not the API host). Tokens scoped to `github` cover both endpoints — no extra scope is needed.
+
+`coco tool env gh` also installs a session-scoped Git credential helper through Git's environment config. In the shell where you ran the `eval`, plain `git fetch`, `git pull`, and `git push` against gateway remotes authenticate automatically without embedding the token in `.git/config` or the remote URL. Re-running the `eval` is idempotent for the gateway helper; it replaces its existing entries instead of growing duplicate Git config entries.
 
 > **Note:** `GH_HOST` is a hostname, not a full URL. `gh` treats any `GH_HOST` other than `github.com` as a GitHub Enterprise host and reads `GH_ENTERPRISE_TOKEN` (not `GH_TOKEN`). `coco env` exports both so `gh` works for the gateway host and `GH_TOKEN` stays available for curl/manual examples.
 
@@ -267,6 +266,6 @@ Revocation takes effect immediately. In-flight requests complete; all subsequent
 | `403 Forbidden` | Token doesn't have this route in its scope | Recreate token with correct `--scope`, or omit scope for all routes |
 | `404 Not Found` | Unknown route prefix | Check the prefix matches a built-in route key in `profiles/routes.json` |
 | `503 Service Unavailable` | Real credential env var missing on the gateway | Set the credential env var and restart |
-| `coco env` fails | Token not in config file | Add `[tokens] laptop = "ccgw_..."` to `~/.config/coco/config.toml` |
+| `coco env` fails | Token not in config file | Add `[tokens.<name>]` with `token = "ccgw_..."` to `~/.config/coco/config.toml` |
 | `GH_HOST` is wrong | Set to full URL instead of hostname | `GH_HOST` must be just the hostname (`gw.example.com`), not a URL |
 | `gh` returns 407 despite `GH_TOKEN` being set | `gh` treats custom `GH_HOST` as Enterprise and ignores `GH_TOKEN` | Export `GH_ENTERPRISE_TOKEN` (or run `eval $(coco env <name>)` which sets both) |
