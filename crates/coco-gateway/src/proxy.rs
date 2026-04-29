@@ -77,7 +77,11 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
 
     let mut headers = req.headers().clone();
 
-    headers.remove(phantom_auth.header.as_str());
+    remove_client_credential_headers(
+        &mut headers,
+        &entry.credential_sources,
+        phantom_auth.header.as_str(),
+    );
     headers.remove("host");
 
     // Only inject credential into headers for Header mode
@@ -141,6 +145,17 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
     }
 }
 
+fn remove_client_credential_headers(
+    headers: &mut axum::http::HeaderMap,
+    sources: &[CredentialSource],
+    phantom_header: &str,
+) {
+    for src in sources {
+        headers.remove(src.inject_header.as_str());
+    }
+    headers.remove(phantom_header);
+}
+
 pub fn resolve_credential(
     sources: &[CredentialSource],
     preferred: Option<usize>,
@@ -164,4 +179,42 @@ pub fn resolve_credential(
             .filter(|v| matches(src, v))
             .map(|v| (src, v))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remove_client_credential_headers;
+    use crate::profile::CredentialSource;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    fn source(header: &str) -> CredentialSource {
+        CredentialSource {
+            env: "TOKEN".to_string(),
+            inject_header: header.to_string(),
+            format: "{}".to_string(),
+            prefix: None,
+            basic_user: None,
+        }
+    }
+
+    #[test]
+    fn removes_all_route_credential_headers_before_injecting_upstream_secret() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer claude-ai"),
+        );
+        headers.insert("x-api-key", HeaderValue::from_static("ccgw_test"));
+        headers.insert("content-type", HeaderValue::from_static("application/json"));
+
+        remove_client_credential_headers(
+            &mut headers,
+            &[source("Authorization"), source("x-api-key")],
+            "x-api-key",
+        );
+
+        assert!(!headers.contains_key("authorization"));
+        assert!(!headers.contains_key("x-api-key"));
+        assert!(headers.contains_key("content-type"));
+    }
 }

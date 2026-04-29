@@ -231,6 +231,25 @@ case "$status" in
   *)       pass "Basic auth (token in username slot) accepted (status $status)" ;;
 esac
 
+section "Auth: route credential headers"
+
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -H "x-api-key: ${ALL_TOKEN}" \
+  "http://localhost:${GATEWAY_PORT}/anthropic/v1/messages" 2>/dev/null)
+case "$status" in
+  407|401) fail "Anthropic x-api-key registry token → got $status, expected auth to pass" ;;
+  *)       pass "Anthropic x-api-key registry token accepted (status $status)" ;;
+esac
+
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Bearer claude-ai-session-token" \
+  -H "x-api-key: ${ALL_TOKEN}" \
+  "http://localhost:${GATEWAY_PORT}/anthropic/v1/messages" 2>/dev/null)
+case "$status" in
+  407|401) fail "Anthropic x-api-key with conflicting Authorization → got $status, expected auth to pass" ;;
+  *)       pass "Anthropic x-api-key wins over conflicting Authorization (status $status)" ;;
+esac
+
 section "Route: github (git smart-HTTP)"
 
 # Resolves via the GitSmartHttp matcher, not a path prefix. The token is
