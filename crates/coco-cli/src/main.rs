@@ -16,18 +16,22 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Print env vars for a named token
-    Env {
+    /// Configure shell and tools for a token
+    Activate {
         /// Token name from config [tokens] section
         name: String,
-        /// Also write ~/.codex/config.toml for Codex CLI
+        /// Also write installable tool config files
         #[arg(long)]
-        codex: bool,
-    },
-    /// Configure specific tools
-    Tool {
-        #[command(subcommand)]
-        action: ToolAction,
+        write: bool,
+        /// Restrict to one or more tool adapters
+        #[arg(long, value_delimiter = ',')]
+        tool: Vec<String>,
+        /// Restrict emitted route-specific entries to one route
+        #[arg(long)]
+        route: Option<String>,
+        /// Render TOOL or TOOL:FILE and exit without shell exports
+        #[arg(long)]
+        render: Option<String>,
     },
     /// Manage gateway tokens
     Token {
@@ -45,40 +49,18 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
-enum ToolAction {
-    /// Print env vars for a specific tool
-    Env {
-        /// Tool adapter name
-        tool: String,
-        /// Token name from config [tokens] section
-        name: String,
-    },
-    /// Render a tool config artifact to stdout
-    Render {
-        /// Tool adapter name
-        tool: String,
-        /// Token name from config [tokens] section
-        name: String,
-    },
-    /// Install a tool config artifact to its default location
-    Install {
-        /// Tool adapter name
-        tool: String,
-        /// Token name from config [tokens] section
-        name: String,
-    },
-}
-
-#[derive(Subcommand)]
 enum TokenAction {
     /// Create a new named token
     Create {
         /// Human-readable name for the token
         #[arg(long)]
         name: String,
-        /// Comma-separated route scopes (empty = all current and future routes)
+        /// Comma-separated route scopes
         #[arg(long, value_delimiter = ',')]
         scope: Vec<String>,
+        /// Create a token that can access all current and future routes
+        #[arg(long)]
+        all_routes: bool,
     },
     /// List all tokens
     Ls,
@@ -93,14 +75,19 @@ enum TokenAction {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Env { name, codex } => commands::env::run(&name, codex)?,
-        Commands::Tool { action } => match action {
-            ToolAction::Env { tool, name } => commands::tool::run_env(&tool, &name)?,
-            ToolAction::Render { tool, name } => commands::tool::run_render(&tool, &name)?,
-            ToolAction::Install { tool, name } => commands::tool::run_install(&tool, &name)?,
-        },
+        Commands::Activate {
+            name,
+            write,
+            tool,
+            route,
+            render,
+        } => commands::activate::run(&name, write, &tool, route.as_deref(), render.as_deref())?,
         Commands::Token { action } => match action {
-            TokenAction::Create { name, scope } => commands::token::create(&name, &scope).await?,
+            TokenAction::Create {
+                name,
+                scope,
+                all_routes,
+            } => commands::token::create(&name, &scope, all_routes).await?,
             TokenAction::Ls => commands::token::list().await?,
             TokenAction::Revoke { name } => commands::token::revoke(&name).await?,
         },

@@ -286,15 +286,15 @@ mod profile_tests {
 
     #[test]
     fn test_embedded_manifest_has_no_top_level_api_route() {
-        let manifest: serde_json::Value =
-            serde_json::from_str(include_str!("../../../profiles/routes.json")).unwrap();
-        let routes = manifest["routes"].as_object().unwrap();
-        assert!(routes.contains_key("github"));
-        assert!(!routes.contains_key("api"));
+        let manifest: serde_yaml::Value =
+            serde_yaml::from_str(include_str!("../../../profiles/coco.yaml")).unwrap();
+        let routes = manifest["routes"].as_mapping().unwrap();
+        assert!(routes.contains_key(serde_yaml::Value::String("github".to_string())));
+        assert!(!routes.contains_key(serde_yaml::Value::String("api".to_string())));
 
-        let aliases = routes["github"]["aliases"].as_array().unwrap();
-        assert_eq!(aliases[0]["prefix"], "api");
-        assert_eq!(aliases[0]["strip_prefix"], "/v3");
+        let aliases = routes["github"]["aliases"].as_sequence().unwrap();
+        assert_eq!(aliases[0]["prefix"].as_str(), Some("api"));
+        assert_eq!(aliases[0]["strip_prefix"].as_str(), Some("/v3"));
     }
 
     #[test]
@@ -707,7 +707,9 @@ mod registry_tests {
     #[tokio::test]
     async fn test_create_and_validate_token() {
         let (registry, _dir) = create_registry().await;
-        let (record, token_value) = registry.create_token("test".to_string(), vec![]).await;
+        let (record, token_value) = registry
+            .create_token("test".to_string(), vec![], true)
+            .await;
 
         assert!(token_value.starts_with("ccgw_"));
         assert_eq!(record.name, "test");
@@ -721,7 +723,9 @@ mod registry_tests {
     #[tokio::test]
     async fn test_wrong_token_fails_validation() {
         let (registry, _dir) = create_registry().await;
-        registry.create_token("test".to_string(), vec![]).await;
+        registry
+            .create_token("test".to_string(), vec![], true)
+            .await;
 
         let validated = registry.validate("ccgw_wrong").await;
         assert!(validated.is_none());
@@ -730,7 +734,9 @@ mod registry_tests {
     #[tokio::test]
     async fn test_revoked_token_fails_validation() {
         let (registry, _dir) = create_registry().await;
-        let (record, token_value) = registry.create_token("test".to_string(), vec![]).await;
+        let (record, token_value) = registry
+            .create_token("test".to_string(), vec![], true)
+            .await;
 
         assert!(registry.validate(&token_value).await.is_some());
         assert!(registry.revoke_token(record.id).await);
@@ -743,9 +749,9 @@ mod registry_tests {
     async fn test_list_tokens_omits_token_value() {
         let (registry, _dir) = create_registry().await;
         registry
-            .create_token("laptop".to_string(), vec!["anthropic".to_string()])
+            .create_token("laptop".to_string(), vec!["anthropic".to_string()], false)
             .await;
-        registry.create_token("ci".to_string(), vec![]).await;
+        registry.create_token("ci".to_string(), vec![], true).await;
 
         let tokens = registry.list_tokens().await;
         assert_eq!(tokens.len(), 2);
@@ -760,7 +766,9 @@ mod registry_tests {
 
         let token_value = {
             let registry = TokenRegistry::load_or_create(path.clone()).await.unwrap();
-            let (_, token) = registry.create_token("persist".to_string(), vec![]).await;
+            let (_, token) = registry
+                .create_token("persist".to_string(), vec![], true)
+                .await;
             token
         };
 
@@ -772,12 +780,12 @@ mod registry_tests {
     async fn test_scope_enforcement() {
         let (registry, _dir) = create_registry().await;
         let (_record, scoped_token) = registry
-            .create_token("scoped".to_string(), vec!["httpbin".to_string()])
+            .create_token("scoped".to_string(), vec!["httpbin".to_string()], false)
             .await;
 
         let validated = registry.validate(&scoped_token).await.unwrap();
         assert_eq!(validated.scope, vec!["httpbin"]);
-        assert!(!validated.is_unrestricted());
+        assert!(!validated.is_all_routes());
         assert!(validated.allows_route("httpbin"));
         assert!(!validated.allows_route("anthropic"));
     }
@@ -785,10 +793,10 @@ mod registry_tests {
     #[tokio::test]
     async fn test_empty_scope_allows_all_routes() {
         let (registry, _dir) = create_registry().await;
-        let (_record, token) = registry.create_token("all".to_string(), vec![]).await;
+        let (_record, token) = registry.create_token("all".to_string(), vec![], true).await;
 
         let validated = registry.validate(&token).await.unwrap();
-        assert!(validated.is_unrestricted());
+        assert!(validated.is_all_routes());
         assert!(validated.allows_route("httpbin"));
         assert!(validated.allows_route("future-route"));
     }

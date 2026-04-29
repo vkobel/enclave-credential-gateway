@@ -8,11 +8,13 @@ pub struct TokenEntry {
     pub token: String,
     #[serde(default)]
     pub scope: Vec<String>,
+    #[serde(default)]
+    pub all_routes: bool,
 }
 
 impl TokenEntry {
     pub fn allows_route(&self, route: &str) -> bool {
-        self.scope.is_empty() || self.scope.iter().any(|scoped_route| scoped_route == route)
+        self.all_routes || self.scope.iter().any(|scoped_route| scoped_route == route)
     }
 }
 
@@ -36,10 +38,6 @@ impl Config {
 
     pub fn path() -> PathBuf {
         Self::config_dir().join("config.toml")
-    }
-
-    pub fn tools_path() -> PathBuf {
-        Self::config_dir().join("tools.toml")
     }
 
     pub fn generated_dir() -> PathBuf {
@@ -74,7 +72,12 @@ impl Config {
             );
         }
         let data = std::fs::read_to_string(&path).context("Failed to read config")?;
-        let config: Config = toml::from_str(&data).context("Failed to parse config")?;
+        let mut config: Config = toml::from_str(&data).context("Failed to parse config")?;
+        for entry in config.tokens.values_mut() {
+            if entry.scope.is_empty() && !entry.all_routes {
+                entry.all_routes = true;
+            }
+        }
         Ok(config)
     }
 

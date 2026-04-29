@@ -20,6 +20,8 @@ pub struct TokenRecord {
     pub id: Uuid,
     pub name: String,
     pub scope: Vec<String>,
+    #[serde(default)]
+    pub all_routes: bool,
     pub created_at: DateTime<Utc>,
     pub status: TokenStatus,
     pub token_hash: String,
@@ -27,11 +29,11 @@ pub struct TokenRecord {
 
 impl TokenRecord {
     pub fn allows_route(&self, route: &str) -> bool {
-        self.is_unrestricted() || self.scope.iter().any(|scoped_route| scoped_route == route)
+        self.all_routes || self.scope.iter().any(|scoped_route| scoped_route == route)
     }
 
-    pub fn is_unrestricted(&self) -> bool {
-        self.scope.is_empty()
+    pub fn is_all_routes(&self) -> bool {
+        self.all_routes
     }
 }
 
@@ -44,7 +46,13 @@ impl TokenRegistry {
     pub async fn load_or_create(path: PathBuf) -> std::io::Result<Self> {
         let tokens = if path.exists() {
             let data = tokio::fs::read_to_string(&path).await?;
-            serde_json::from_str(&data).unwrap_or_default()
+            let mut records: Vec<TokenRecord> = serde_json::from_str(&data).unwrap_or_default();
+            for record in &mut records {
+                if record.scope.is_empty() && !record.all_routes {
+                    record.all_routes = true;
+                }
+            }
+            records
         } else {
             Vec::new()
         };
@@ -54,7 +62,12 @@ impl TokenRegistry {
         })
     }
 
-    pub async fn create_token(&self, name: String, scope: Vec<String>) -> (TokenRecord, String) {
+    pub async fn create_token(
+        &self,
+        name: String,
+        scope: Vec<String>,
+        all_routes: bool,
+    ) -> (TokenRecord, String) {
         let mut raw = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut raw);
         let token_value = format!("ccgw_{}", hex::encode(raw));
@@ -64,6 +77,7 @@ impl TokenRegistry {
             id: Uuid::new_v4(),
             name,
             scope,
+            all_routes,
             created_at: Utc::now(),
             status: TokenStatus::Active,
             token_hash: hash,

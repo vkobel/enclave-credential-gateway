@@ -5,6 +5,7 @@ use crate::registry::TokenRegistry;
 use axum::body::Body;
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::{connect::HttpConnector, Client};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
@@ -40,6 +41,16 @@ impl AppState {
         self.route_entry(prefix)
             .map(|entry| entry.canonical_route.as_str())
             .unwrap_or(prefix)
+    }
+
+    pub fn known_routes(&self) -> Vec<String> {
+        self.routes
+            .iter()
+            .filter(|(key, _)| !key.starts_with("__git__"))
+            .map(|(_, entry)| entry.canonical_route.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     /// Resolves a full request path to a route entry and the upstream path.

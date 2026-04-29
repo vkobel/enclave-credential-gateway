@@ -86,7 +86,7 @@ async fn main() {
 
     let routes = load_profile();
     info!(
-        "Loaded {} embedded route(s) from profiles/routes.json",
+        "Loaded {} embedded route(s) from profiles/coco.yaml",
         routes.len()
     );
 

@@ -96,6 +96,7 @@ mod tests {
             TokenEntry {
                 token: "ccgw_test".to_string(),
                 scope: scope.iter().map(|scope| scope.to_string()).collect(),
+                all_routes: false,
             },
         );
 

@@ -4,8 +4,8 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::warn;
 
-const EMBEDDED_PROFILE_PATH: &str = "profiles/routes.json";
-const EMBEDDED_PROFILE_JSON: &str = include_str!("../../../profiles/routes.json");
+const EMBEDDED_PROFILE_PATH: &str = "profiles/coco.yaml";
+const EMBEDDED_PROFILE_YAML: &str = include_str!("../../../profiles/coco.yaml");
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CredentialSource {
@@ -48,6 +48,8 @@ pub enum RouteMatcher {
 #[derive(Debug, Deserialize)]
 pub(crate) struct Profile {
     pub(crate) routes: BTreeMap<String, ProfileRoute>,
+    #[serde(default, rename = "tools")]
+    pub(crate) _tools: BTreeMap<String, serde_yaml::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -168,7 +170,7 @@ pub fn load_profile() -> Vec<(String, RouteEntry)> {
 }
 
 pub fn load_embedded_routes() -> Vec<(String, RouteEntry)> {
-    try_load_routes_from_str(EMBEDDED_PROFILE_PATH, EMBEDDED_PROFILE_JSON)
+    try_load_routes_from_str(EMBEDDED_PROFILE_PATH, EMBEDDED_PROFILE_YAML)
         .expect("embedded profile manifest must be valid")
 }
 
@@ -176,7 +178,7 @@ pub fn try_load_routes_from_str(
     source: &str,
     contents: &str,
 ) -> Result<Vec<(String, RouteEntry)>, String> {
-    let profile: Profile = serde_json::from_str(contents)
+    let profile: Profile = serde_yaml::from_str(contents)
         .map_err(|e| format!("Failed to parse profile at {}: {}", source, e))?;
 
     let mut original_keys = BTreeSet::new();
