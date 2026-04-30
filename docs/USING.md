@@ -27,14 +27,14 @@ Scope values are route prefixes from your profile. Use `--all-routes` to create 
 
 ```bash
 # Via coco CLI (requires admin_token in config)
-coco token create --name laptop --scope github,httpbin,anthropic,openai,ollama
+coco token create --name laptop --scope github,anthropic,openai
 # The CLI saves the returned token to ~/.config/coco/config.toml.
 
 # Or directly via curl
 curl -s -X POST https://gw.example.com/admin/tokens \
   -H "Authorization: Bearer $COCO_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"name":"laptop","scope":["github","httpbin","anthropic","openai","ollama"]}' | jq -r .token
+  -d '{"name":"laptop","scope":["github","anthropic","openai"]}' | jq -r .token
 ```
 
 **4. Add the token to config:**
@@ -43,11 +43,11 @@ curl -s -X POST https://gw.example.com/admin/tokens \
 # ~/.config/coco/config.toml
 [tokens.laptop]
 token = "ccgw_..."
-scope = ["github", "httpbin", "anthropic", "openai", "ollama"]
+scope = ["github", "anthropic", "openai"]
 all_routes = false
 ```
 
-> Built-in route reference: `github`, `anthropic`, `openai`, `httpbin`, `ollama`, `telegram`, `groq`, `together`, `elevenlabs`. Built-in routes and tool adapters live together in the embedded `profiles/coco.yaml` manifest. GitHub owns an `api` compatibility alias for `gh`; `/api/v3/...` scopes as `github`.
+> Built-in routes: `github`, `anthropic`, `openai`. Tool adapters: `gh`, `codex`, `claude-code`. Routes and adapters live in the embedded `profiles/coco.yaml` manifest. GitHub owns an `api` compatibility alias for `gh`; `/api/v3/...` scopes as `github`.
 
 ---
 
@@ -62,7 +62,7 @@ This opens an activated subshell. CoCo prints a short banner with exported env v
 For scripts that need to mutate the current shell, use `--eval`:
 
 ```bash
-eval "$(coco activate laptop --eval --tool shell)"
+eval "$(coco activate laptop --eval --tool gh)"
 ```
 
 Use `--describe` to inspect the activation without applying it.
@@ -180,77 +180,12 @@ gh repo list
 
 ---
 
-## Ollama
-
-### With coco (recommended)
-
-```bash
-coco activate laptop --tool shell
-ollama run llama3.2
-```
-
-### Manual env var
-
-```bash
-export OLLAMA_HOST=https://gw.example.com/ollama
-ollama run llama3.2
-```
-
-Requires `OLLAMA_HOST` to be set to the gateway's `/ollama` prefix. The gateway forwards Ollama API paths to Ollama Cloud at `https://ollama.com` and injects the real gateway-side `OLLAMA_API_KEY` as `Authorization: Bearer ...`.
-
----
-
-## OpenCode
-
-### With coco (recommended)
-
-```bash
-coco activate laptop --tool opencode
-opencode
-```
-
-`coco activate <token> --tool opencode` materializes an OpenCode config under `~/.config/coco/generated/` and exports `OPENCODE_CONFIG` plus the in-scope API key env vars needed by that generated config.
-
----
-
-## Telegram Bot
-
-Telegram's Bot API embeds the token in the URL path (`/bot<TOKEN>/<method>`), so it can't use header injection. The gateway handles this with `inject_mode: url_path`.
-
-### Shell / curl
-
-```bash
-curl "https://gw.example.com/telegram/getMe" \
-  -H "Authorization: Bearer ccgw_..."
-# gateway rewrites path to /bot<TELEGRAM_BOT_TOKEN>/getMe before forwarding
-```
-
-### Python (python-telegram-bot)
-
-```python
-from telegram.ext import ApplicationBuilder
-
-app = (
-    ApplicationBuilder()
-    .token("ccgw_...")              # phantom token
-    .base_url("https://gw.example.com/telegram/")
-    .build()
-)
-```
-
----
-
 ## Verifying the gateway
 
 ```bash
 # Health check (unauthenticated)
 curl https://gw.example.com/health
 # {"status":"ok"}
-
-# Smoke test — no real upstream credential needed; httpbin echoes the token back
-curl https://gw.example.com/httpbin/bearer \
-  -H "Authorization: Bearer ccgw_..."
-# {"authenticated": true, "token": "any-value"}
 
 # Test scope enforcement: request a route not in the token's scope
 curl https://gw.example.com/openai/v1/models \

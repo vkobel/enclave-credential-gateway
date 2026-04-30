@@ -483,63 +483,6 @@ mod tests {
     }
 
     #[test]
-    fn shell_adapter_preserves_existing_exports() {
-        with_temp_config_root(|_temp| {
-            let config = config_with_scope(&["anthropic", "openai", "github", "ollama", "httpbin"]);
-            let activation = activate(
-                &config,
-                "laptop",
-                Some(&["shell".to_string()]),
-                None,
-                ActivationMode::Generated,
-            )
-            .unwrap();
-
-            assert_eq!(
-                activation.exports,
-                vec![
-                    EnvExport {
-                        key: "ANTHROPIC_BASE_URL".to_string(),
-                        value: "https://gw.example.com/anthropic".to_string()
-                    },
-                    EnvExport {
-                        key: "ANTHROPIC_API_KEY".to_string(),
-                        value: "ccgw_test".to_string()
-                    },
-                    EnvExport {
-                        key: "OPENAI_BASE_URL".to_string(),
-                        value: "https://gw.example.com/openai".to_string()
-                    },
-                    EnvExport {
-                        key: "OPENAI_API_KEY".to_string(),
-                        value: "ccgw_test".to_string()
-                    },
-                    EnvExport {
-                        key: "GH_HOST".to_string(),
-                        value: "gw.example.com".to_string()
-                    },
-                    EnvExport {
-                        key: "GH_ENTERPRISE_TOKEN".to_string(),
-                        value: "ccgw_test".to_string()
-                    },
-                    EnvExport {
-                        key: "GH_TOKEN".to_string(),
-                        value: "ccgw_test".to_string()
-                    },
-                    EnvExport {
-                        key: "OLLAMA_HOST".to_string(),
-                        value: "https://gw.example.com/ollama".to_string()
-                    },
-                    EnvExport {
-                        key: "HTTPBIN_TOKEN".to_string(),
-                        value: "ccgw_test".to_string()
-                    },
-                ]
-            );
-        });
-    }
-
-    #[test]
     fn gh_adapter_exports_enterprise_credentials() {
         with_temp_config_root(|temp| {
             let config = config_with_scope(&["github"]);
@@ -605,38 +548,6 @@ mod tests {
                 .exports
                 .iter()
                 .any(|export| export.key == "GIT_CONFIG_GLOBAL"));
-        });
-    }
-
-    #[test]
-    fn opencode_env_materializes_managed_config() {
-        with_temp_config_root(|temp| {
-            let config = config_with_scope(&["openai", "anthropic"]);
-            let activation = activate(
-                &config,
-                "laptop",
-                Some(&["opencode".to_string()]),
-                None,
-                ActivationMode::Generated,
-            )
-            .unwrap();
-
-            let expected_path = temp
-                .path()
-                .join(".config/coco/generated/opencode/laptop/opencode.json");
-            assert!(expected_path.exists());
-            assert!(activation.exports.contains(&EnvExport {
-                key: "OPENCODE_CONFIG".to_string(),
-                value: expected_path.display().to_string()
-            }));
-            assert!(activation.exports.contains(&EnvExport {
-                key: "OPENAI_API_KEY".to_string(),
-                value: "ccgw_test".to_string()
-            }));
-            assert!(activation.exports.contains(&EnvExport {
-                key: "ANTHROPIC_API_KEY".to_string(),
-                value: "ccgw_test".to_string()
-            }));
         });
     }
 

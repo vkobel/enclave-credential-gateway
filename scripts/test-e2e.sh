@@ -7,10 +7,8 @@
 #
 # Usage:
 #   export COCO_ADMIN_TOKEN=test-admin       # optional; defaults to test-admin
-#   export HTTPBIN_TOKEN=anything           # optional, enables httpbin injection test
 #   export OPENAI_API_KEY=sk-...            # optional, enables live OpenAI test
 #   export ANTHROPIC_API_KEY=sk-ant-api-... # optional, enables live Anthropic test
-#   export OLLAMA_API_KEY=ollama_...        # optional, enables live Ollama Cloud test
 #   export GITHUB_TOKEN=ghp_...            # optional, enables live GitHub REST + git tests
 #   ./scripts/test-e2e.sh
 #
@@ -169,11 +167,11 @@ section "Registry tokens"
 
 create_token "e2e-all" '[]' true
 ALL_TOKEN="$CREATED_TOKEN"
-create_token "e2e-httpbin" '["httpbin"]'
-HTTPBIN_SCOPED_TOKEN="$CREATED_TOKEN"
+create_token "e2e-openai" '["openai"]'
+OPENAI_SCOPED_TOKEN="$CREATED_TOKEN"
 create_token "e2e-github" '["github"]'
 GITHUB_SCOPED_TOKEN="$CREATED_TOKEN"
-create_token "e2e-revoked" '["httpbin"]'
+create_token "e2e-revoked" '["openai"]'
 REVOKED_TOKEN="$CREATED_TOKEN"
 REVOKED_TOKEN_ID="$CREATED_TOKEN_ID"
 
@@ -188,7 +186,7 @@ status=$(curl -s -o /dev/null -w "%{http_code}" \
   "http://localhost:${GATEWAY_PORT}/openai/" 2>/dev/null)
 [[ "$status" == "407" ]] && pass "Wrong token → 407" || fail "Wrong token → expected 407, got $status"
 
-gw_request_token GET /openai/ "$HTTPBIN_SCOPED_TOKEN"
+gw_request_token GET /anthropic/ "$OPENAI_SCOPED_TOKEN"
 [[ "$GW_STATUS" == "403" ]] \
   && pass "Out-of-scope registry token → 403" \
   || fail "Out-of-scope registry token → expected 403, got $GW_STATUS"
@@ -198,7 +196,7 @@ GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
   -H "Authorization: Bearer ${COCO_ADMIN_TOKEN}" 2>/dev/null)
 [[ "$GW_STATUS" == "200" ]] && pass "Revoked registry token" || fail "Revocation → expected 200, got $GW_STATUS"
 
-gw_request_token GET /httpbin/headers "$REVOKED_TOKEN"
+gw_request_token GET /openai/ "$REVOKED_TOKEN"
 [[ "$GW_STATUS" == "407" ]] \
   && pass "Revoked token → 407" \
   || fail "Revoked token → expected 407, got $GW_STATUS"
@@ -213,11 +211,11 @@ section "Auth: HTTP Basic scheme"
 # `git` over HTTPS authenticates with `Authorization: Basic base64(user:token)`,
 # not Bearer. The gateway should decode Basic and validate either half against
 # the registry. We assert auth passes (status != 407/401) — the actual upstream
-# response depends on whether HTTPBIN_TOKEN is set.
+# response depends on whether ANTHROPIC_API_KEY is set.
 basic_value=$(printf 'x-access-token:%s' "$ALL_TOKEN" | base64)
 status=$(curl -s -o /dev/null -w "%{http_code}" \
   -H "Authorization: Basic ${basic_value}" \
-  "http://localhost:${GATEWAY_PORT}/httpbin/headers" 2>/dev/null)
+  "http://localhost:${GATEWAY_PORT}/anthropic/v1/messages" 2>/dev/null)
 case "$status" in
   407|401) fail "Basic auth (token in password slot) → got $status, expected auth to pass" ;;
   *)       pass "Basic auth (token in password slot) accepted (status $status)" ;;
@@ -226,7 +224,7 @@ esac
 basic_value=$(printf '%s:x-oauth-basic' "$ALL_TOKEN" | base64)
 status=$(curl -s -o /dev/null -w "%{http_code}" \
   -H "Authorization: Basic ${basic_value}" \
-  "http://localhost:${GATEWAY_PORT}/httpbin/headers" 2>/dev/null)
+  "http://localhost:${GATEWAY_PORT}/anthropic/v1/messages" 2>/dev/null)
 case "$status" in
   407|401) fail "Basic auth (token in username slot) → got $status, expected auth to pass" ;;
   *)       pass "Basic auth (token in username slot) accepted (status $status)" ;;
@@ -249,14 +247,6 @@ status=$(curl -s -o /dev/null -w "%{http_code}" \
 case "$status" in
   407|401) fail "Anthropic x-api-key with conflicting Authorization → got $status, expected auth to pass" ;;
   *)       pass "Anthropic x-api-key wins over conflicting Authorization (status $status)" ;;
-esac
-
-status=$(curl -s -o /dev/null -w "%{http_code}" \
-  -H "Authorization: Bearer ${ALL_TOKEN}" \
-  "http://localhost:${GATEWAY_PORT}/ollama/api/tags" 2>/dev/null)
-case "$status" in
-  407|401) fail "Ollama registry token → got $status, expected auth to pass" ;;
-  *)       pass "Ollama registry token accepted (status $status)" ;;
 esac
 
 section "Route: github (git smart-HTTP)"
@@ -283,7 +273,7 @@ status=$(curl -s -o /dev/null -w "%{http_code}" \
 
 # Same path, out-of-scope token — must 403.
 status=$(curl -s -o /dev/null -w "%{http_code}" \
-  -H "Authorization: Bearer ${HTTPBIN_SCOPED_TOKEN}" \
+  -H "Authorization: Bearer ${OPENAI_SCOPED_TOKEN}" \
   "http://localhost:${GATEWAY_PORT}${git_path}" 2>/dev/null)
 [[ "$status" == "403" ]] \
   && pass "git smart-HTTP with out-of-scope token → 403" \
@@ -360,23 +350,6 @@ grep -q "openai_base_url = \"http://localhost:${GATEWAY_PORT}/openai/v1\"" "$CLI
   && pass "Generated Codex config points at gateway OpenAI route" \
   || fail "Generated Codex config missing gateway OpenAI route"
 
-section "Route: httpbin"
-
-if [[ -z "${HTTPBIN_TOKEN:-}" ]]; then
-  skip "HTTPBIN_TOKEN not set — skipping httpbin injection tests"
-else
-  gw_request GET /httpbin/headers
-
-  [[ "$GW_STATUS" == "200" ]] \
-    && pass "Request reached httpbin (200)" \
-    || fail "httpbin request failed — status $GW_STATUS"
-
-  injected=$(echo "$GW_BODY" | jq -r '.headers.Authorization // empty' 2>/dev/null)
-  [[ "$injected" == "Bearer ${HTTPBIN_TOKEN}" ]] \
-    && pass "Authorization header injected correctly" \
-    || fail "Authorization header wrong — got: '$injected', expected: 'Bearer ${HTTPBIN_TOKEN}'"
-fi
-
 section "Route: anthropic"
 
 if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
@@ -447,18 +420,6 @@ else
   [[ "$choices" -ge 1 ]] \
     && pass "Response has choices ($choices)" \
     || fail "Response missing choices field"
-fi
-
-section "Route: ollama"
-
-if [[ -z "${OLLAMA_API_KEY:-}" ]]; then
-  skip "OLLAMA_API_KEY not set — skipping Ollama Cloud tests"
-else
-  gw_request GET /ollama/api/tags
-
-  [[ "$GW_STATUS" == "200" ]] \
-    && pass "Ollama Cloud tags request reached upstream (200)" \
-    || { fail "Ollama Cloud tags request failed — status $GW_STATUS"; echo "    Body: $(echo "$GW_BODY" | head -3)"; }
 fi
 
 section "Route: github (live REST API + git smart-HTTP)"

@@ -2,7 +2,9 @@
 
 CoCo is a credential proxy for AI agents and developer tools. Clients use scoped CoCo tokens (`ccgw_...`) instead of real vendor keys. The gateway validates the CoCo token, checks route scope, removes the client credential, and injects the real upstream credential server-side.
 
-Use it when tools like `gh`, Git, Codex, Claude Code, OpenAI-compatible SDKs, OpenCode, Ollama, or curl scripts need vendor APIs without placing real API keys on the machine running the tool.
+Use it when tools like `gh`, Codex, or Claude Code need vendor APIs without placing real API keys on the machine running the tool.
+
+**Supported tool adapters:** `gh` (GitHub CLI + Git smart-HTTP), `codex` (OpenAI Codex CLI), `claude-code` (Anthropic Claude Code).
 
 ## Local Gateway Deployment
 
@@ -22,7 +24,6 @@ Run this from the repository root:
 ```bash
 export COCO_ADMIN_TOKEN="$(openssl rand -hex 32)"
 export GITHUB_TOKEN=ghp_...          # real upstream GitHub token, kept server-side
-export HTTPBIN_TOKEN=anything        # optional, useful for route smoke tests
 
 docker compose up -d --build
 ```
@@ -31,7 +32,6 @@ What these values do:
 
 - `COCO_ADMIN_TOKEN` protects the gateway admin API. Save it; the CLI needs it to create and revoke CoCo tokens.
 - `GITHUB_TOKEN` is the real GitHub credential. Clients never receive it; the gateway injects it only when forwarding `github` traffic upstream.
-- `HTTPBIN_TOKEN` enables the `httpbin` route for simple testing.
 - Compose stores the token registry in the `coco-data` volume at `/data/tokens.json`.
 - Caddy listens on local ports `80` and `443` and reverse-proxies to `coco-gateway:8080`.
 
@@ -167,19 +167,15 @@ coco activate codex-local --tool codex
 codex
 ```
 
-Codex needs config files for the gateway URL and API-key auth. Activation writes generated Codex files under `~/.config/coco/generated/codex/<token>/home` and sets `CODEX_HOME` in the activated subshell. Use `--write --tool codex` only when you want to write persistent files into `~/.codex`.
+Codex needs config files for the gateway URL and API-key auth. Activation writes generated Codex files under `~/.config/coco/generated/codex/<token>/home` and sets `CODEX_HOME` in the activated subshell.
 
-### Generic SDKs and curl
+### Claude Code
 
 ```bash
-coco token create --name sdk-local --scope openai
-eval "$(coco activate sdk-local --eval --tool shell)"
-
-curl "$OPENAI_BASE_URL/v1/models" \
-  -H "Authorization: Bearer $OPENAI_API_KEY"
+coco token create --name claude-local --scope anthropic
+coco activate claude-local --tool claude-code
+claude
 ```
-
-The API key value is the CoCo token. The gateway swaps it for the real upstream key before forwarding.
 
 ## Use an Existing Gateway
 
@@ -206,7 +202,7 @@ Then activate the tool you need:
 ```bash
 coco activate laptop --tool gh
 coco activate laptop --tool codex
-coco activate laptop --tool shell
+coco activate laptop --tool claude-code
 ```
 
 ## Routes
@@ -222,12 +218,18 @@ Token scopes use the top-level route key. Unrestricted tokens are explicit: crea
 | `/github/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` | `Authorization: Bearer ...` |
 | `/api/v3/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` | `gh` compatibility route; strips route-relative `/v3` |
 | `/<owner>/<repo>.git/{info/refs,git-upload-pack,git-receive-pack}` | `github` | `https://github.com` | `GITHUB_TOKEN` | Git smart-HTTP; accepts HTTP Basic auth |
-| `/httpbin/...` | `httpbin` | `https://httpbin.org` | `HTTPBIN_TOKEN` | `Authorization: Bearer ...` |
-| `/ollama/...` | `ollama` | `https://ollama.com` | `OLLAMA_API_KEY` | Ollama Cloud API; `Authorization: Bearer ...` |
-| `/telegram/...` | `telegram` | `https://api.telegram.org` | `TELEGRAM_BOT_TOKEN` | URL path token injection |
-| `/groq/...` | `groq` | `https://api.groq.com` | `GROQ_API_KEY` | `Authorization: Bearer ...` |
-| `/together/...` | `together` | `https://api.together.xyz` | `TOGETHER_API_KEY` | `Authorization: Bearer ...` |
-| `/elevenlabs/...` | `elevenlabs` | `https://api.elevenlabs.io` | `ELEVENLABS_API_KEY` | `xi-api-key` |
+
+### Planned routes
+
+These routes are not yet in the embedded manifest but are intended for future integration:
+
+| Scope | Upstream | Notes |
+|---|---|---|
+| `ollama` | `https://ollama.com` | Ollama Cloud; `OLLAMA_API_KEY` |
+| `groq` | `https://api.groq.com` | `GROQ_API_KEY` |
+| `together` | `https://api.together.xyz` | `TOGETHER_API_KEY` |
+| `elevenlabs` | `https://api.elevenlabs.io` | `ELEVENLABS_API_KEY`; uses `xi-api-key` header |
+| `telegram` | `https://api.telegram.org` | `TELEGRAM_BOT_TOKEN`; requires URL-path injection mode |
 
 Route manifest syntax is route-first:
 
@@ -313,10 +315,8 @@ cargo test -p coco-cli
 Optional live upstream checks:
 
 ```bash
-export HTTPBIN_TOKEN=anything
 export OPENAI_API_KEY=sk-...
 export ANTHROPIC_API_KEY=sk-ant-api-...
-export OLLAMA_API_KEY=ollama_...
 export GITHUB_TOKEN=ghp_...
 ./scripts/test-e2e.sh
 ```
@@ -332,7 +332,7 @@ cargo test -p coco-gateway --features integration
 
 ## Docs
 
-- [docs/USING.md](./docs/USING.md): per-tool setup for Claude Code, Codex, `gh`, OpenCode, Ollama, Telegram, and SDKs.
+- [docs/USING.md](./docs/USING.md): per-tool setup for Claude Code, Codex, and `gh`.
 - [docs/TEE-SECURITY.md](./docs/TEE-SECURITY.md): TEE and deployment security notes.
 - [docs/product.md](./docs/product.md): product framing.
 - [docs/task.md](./docs/task.md): project task history.
