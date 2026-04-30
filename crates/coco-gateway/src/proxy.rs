@@ -12,12 +12,16 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use http_body_util::BodyExt;
+use hyper::upgrade::OnUpgrade;
+use hyper_util::rt::TokioIo;
 use std::sync::Arc;
+use tokio::io::copy_bidirectional;
 use tracing::{error, info, warn};
 
-pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body>) -> Response {
+pub async fn proxy_handler(State(state): State<Arc<AppState>>, mut req: Request<Body>) -> Response {
     let path = req.uri().path().to_string();
     let method = req.method().clone();
+    let client_upgrade = is_upgrade_request(&req).then(|| hyper::upgrade::on(&mut req));
 
     let resolved_route = match state.resolve(&path) {
         Some(r) => r,
@@ -108,11 +112,15 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
         HeaderValue::from_str(upstream_host).unwrap_or_else(|_| HeaderValue::from_static("")),
     );
 
-    let body_bytes = match req.into_body().collect().await {
-        Ok(b) => b.to_bytes(),
-        Err(e) => {
-            error!("Failed to read request body: {}", e);
-            return StatusCode::BAD_GATEWAY.into_response();
+    let body = if client_upgrade.is_some() {
+        Body::empty()
+    } else {
+        match req.into_body().collect().await {
+            Ok(b) => Body::from(b.to_bytes()),
+            Err(e) => {
+                error!("Failed to read request body: {}", e);
+                return StatusCode::BAD_GATEWAY.into_response();
+            }
         }
     };
 
@@ -120,7 +128,7 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
     for (k, v) in &headers {
         upstream_req = upstream_req.header(k, v);
     }
-    let upstream_req = match upstream_req.body(Body::from(body_bytes)) {
+    let upstream_req = match upstream_req.body(body) {
         Ok(r) => r,
         Err(e) => {
             error!("Failed to build upstream request: {}", e);
@@ -132,6 +140,13 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
         Ok(resp) => {
             let status = resp.status();
             info!("{} {} → {} [{}]", method, path, upstream_url, status);
+
+            if status == StatusCode::SWITCHING_PROTOCOLS {
+                if let Some(client_upgrade) = client_upgrade {
+                    return upgrade_response(resp, client_upgrade);
+                }
+            }
+
             let resp_headers = resp.headers().clone();
             let body = Body::new(resp.into_body().map_err(std::io::Error::other));
             let mut response = Response::new(body);
@@ -144,6 +159,47 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
             StatusCode::BAD_GATEWAY.into_response()
         }
     }
+}
+
+fn is_upgrade_request(req: &Request<Body>) -> bool {
+    req.headers()
+        .get(axum::http::header::CONNECTION)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case("upgrade"))
+        })
+        && req.headers().contains_key(axum::http::header::UPGRADE)
+}
+
+fn upgrade_response(
+    mut upstream_resp: hyper::Response<hyper::body::Incoming>,
+    client_upgrade: OnUpgrade,
+) -> Response {
+    let status = upstream_resp.status();
+    let headers = upstream_resp.headers().clone();
+    let upstream_upgrade = hyper::upgrade::on(&mut upstream_resp);
+
+    tokio::spawn(async move {
+        let (client, upstream) = match tokio::try_join!(client_upgrade, upstream_upgrade) {
+            Ok(upgrades) => upgrades,
+            Err(e) => {
+                warn!("WebSocket upgrade failed: {}", e);
+                return;
+            }
+        };
+
+        let mut client = TokioIo::new(client);
+        let mut upstream = TokioIo::new(upstream);
+        if let Err(e) = copy_bidirectional(&mut client, &mut upstream).await {
+            warn!("WebSocket tunnel closed with error: {}", e);
+        }
+    });
+
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = status;
+    *response.headers_mut() = headers;
+    response
 }
 
 fn remove_client_credential_headers(
@@ -230,9 +286,15 @@ fn resolve_credential_with(
 
 #[cfg(test)]
 mod tests {
-    use super::{insert_extra_headers, remove_client_credential_headers, resolve_credential_with};
+    use super::{
+        insert_extra_headers, is_upgrade_request, remove_client_credential_headers,
+        resolve_credential_with,
+    };
     use crate::profile::CredentialSource;
-    use axum::http::{HeaderMap, HeaderValue};
+    use axum::{
+        body::Body,
+        http::{HeaderMap, HeaderValue, Request},
+    };
     use std::collections::BTreeMap;
 
     fn source(header: &str) -> CredentialSource {
@@ -261,6 +323,24 @@ mod tests {
             extra_headers: BTreeMap::new(),
             basic_user: None,
         }
+    }
+
+    #[test]
+    fn detects_http_upgrade_requests() {
+        let req = Request::builder()
+            .header("connection", "keep-alive, Upgrade")
+            .header("upgrade", "websocket")
+            .body(Body::empty())
+            .unwrap();
+
+        assert!(is_upgrade_request(&req));
+
+        let req = Request::builder()
+            .header("connection", "keep-alive")
+            .body(Body::empty())
+            .unwrap();
+
+        assert!(!is_upgrade_request(&req));
     }
 
     #[test]

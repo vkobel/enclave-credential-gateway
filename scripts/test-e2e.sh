@@ -10,6 +10,7 @@
 #   export HTTPBIN_TOKEN=anything           # optional, enables httpbin injection test
 #   export OPENAI_API_KEY=sk-...            # optional, enables live OpenAI test
 #   export ANTHROPIC_API_KEY=sk-ant-api-... # optional, enables live Anthropic test
+#   export OLLAMA_API_KEY=ollama_...        # optional, enables live Ollama Cloud test
 #   export GITHUB_TOKEN=ghp_...            # optional, enables live GitHub REST + git tests
 #   ./scripts/test-e2e.sh
 #
@@ -250,6 +251,14 @@ case "$status" in
   *)       pass "Anthropic x-api-key wins over conflicting Authorization (status $status)" ;;
 esac
 
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Bearer ${ALL_TOKEN}" \
+  "http://localhost:${GATEWAY_PORT}/ollama/api/tags" 2>/dev/null)
+case "$status" in
+  407|401) fail "Ollama registry token → got $status, expected auth to pass" ;;
+  *)       pass "Ollama registry token accepted (status $status)" ;;
+esac
+
 section "Route: github (git smart-HTTP)"
 
 # Resolves via the GitSmartHttp matcher, not a path prefix. The token is
@@ -349,9 +358,19 @@ else
   fail "coco activate --write --tool codex should write Codex config for all-route token"
 fi
 
-grep -q "openai_base_url = \"http://localhost:${GATEWAY_PORT}/openai\"" "$CLI_HOME/.codex/config.toml" \
+grep -q "openai_base_url = \"http://localhost:${GATEWAY_PORT}/openai/v1\"" "$CLI_HOME/.codex/config.toml" \
   && pass "Codex config points at gateway OpenAI route" \
   || fail "Codex config missing gateway OpenAI route"
+
+grep -q "# wrote .*\\.codex/config\\.toml" "$CLI_STDOUT" \
+  && grep -q "# wrote .*\\.codex/auth\\.json" "$CLI_STDOUT" \
+  && pass "coco activate --write reports Codex files" \
+  || fail "coco activate --write did not report Codex files"
+
+grep -q '"auth_mode": "apikey"' "$CLI_HOME/.codex/auth.json" \
+  && grep -q '"OPENAI_API_KEY": "' "$CLI_HOME/.codex/auth.json" \
+  && pass "Codex auth file uses API-key login format" \
+  || fail "Codex auth file missing API-key login fields"
 
 section "Route: httpbin"
 
@@ -440,6 +459,18 @@ else
   [[ "$choices" -ge 1 ]] \
     && pass "Response has choices ($choices)" \
     || fail "Response missing choices field"
+fi
+
+section "Route: ollama"
+
+if [[ -z "${OLLAMA_API_KEY:-}" ]]; then
+  skip "OLLAMA_API_KEY not set — skipping Ollama Cloud tests"
+else
+  gw_request GET /ollama/api/tags
+
+  [[ "$GW_STATUS" == "200" ]] \
+    && pass "Ollama Cloud tags request reached upstream (200)" \
+    || { fail "Ollama Cloud tags request failed — status $GW_STATUS"; echo "    Body: $(echo "$GW_BODY" | head -3)"; }
 fi
 
 section "Route: github (live REST API + git smart-HTTP)"

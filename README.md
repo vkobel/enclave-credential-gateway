@@ -167,6 +167,8 @@ coco activate codex-local --write --tool codex
 codex
 ```
 
+Codex needs `~/.codex/config.toml` for the gateway URL and `~/.codex/auth.json` for API-key auth. The Codex `openai_base_url` must include `/v1`; `OPENAI_BASE_URL` is enough for SDKs and curl, but not for Codex.
+
 ### Generic SDKs and curl
 
 ```bash
@@ -221,7 +223,7 @@ Token scopes use the top-level route key. Unrestricted tokens are explicit: crea
 | `/api/v3/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` | `gh` compatibility route; strips route-relative `/v3` |
 | `/<owner>/<repo>.git/{info/refs,git-upload-pack,git-receive-pack}` | `github` | `https://github.com` | `GITHUB_TOKEN` | Git smart-HTTP; accepts HTTP Basic auth |
 | `/httpbin/...` | `httpbin` | `https://httpbin.org` | `HTTPBIN_TOKEN` | `Authorization: Bearer ...` |
-| `/ollama/...` | `ollama` | `https://127.0.0.1:11434` | `OLLAMA_API_KEY` | `Authorization: Bearer ...` |
+| `/ollama/...` | `ollama` | `https://ollama.com` | `OLLAMA_API_KEY` | Ollama Cloud API; `Authorization: Bearer ...` |
 | `/telegram/...` | `telegram` | `https://api.telegram.org` | `TELEGRAM_BOT_TOKEN` | URL path token injection |
 | `/groq/...` | `groq` | `https://api.groq.com` | `GROQ_API_KEY` | `Authorization: Bearer ...` |
 | `/together/...` | `together` | `https://api.together.xyz` | `TOGETHER_API_KEY` | `Authorization: Bearer ...` |
@@ -314,6 +316,7 @@ Optional live upstream checks:
 export HTTPBIN_TOKEN=anything
 export OPENAI_API_KEY=sk-...
 export ANTHROPIC_API_KEY=sk-ant-api-...
+export OLLAMA_API_KEY=ollama_...
 export GITHUB_TOKEN=ghp_...
 ./scripts/test-e2e.sh
 ```

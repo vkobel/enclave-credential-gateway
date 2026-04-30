@@ -142,6 +142,7 @@ pub fn activate(
         }
     }
     let mut exports: Vec<(String, String)> = Vec::new();
+    let mut write_messages: Vec<String> = Vec::new();
 
     for (tool, adapter) in manifest.tools {
         if let Some(tool_filter) = tool_filter {
@@ -185,11 +186,17 @@ pub fn activate(
         }
 
         if write {
-            install_tool_files(&tool, &adapter, &ctx, &managed_files)?;
+            for path in install_tool_files(&tool, &adapter, &ctx, &managed_files)? {
+                write_messages.push(format!("# wrote {}", path.display()));
+            }
         }
     }
 
-    Ok(exports.into_iter().map(|(_, line)| line).collect())
+    Ok(exports
+        .into_iter()
+        .map(|(_, line)| line)
+        .chain(write_messages)
+        .collect())
 }
 
 fn push_export(exports: &mut Vec<(String, String)>, key: String, line: String) {
@@ -572,8 +579,22 @@ mod tests {
 
             let expected = temp.path().join(".codex/config.toml");
             let contents = std::fs::read_to_string(expected).unwrap();
-            assert!(contents.contains("openai_base_url = \"https://gw.example.com/openai\""));
-            assert!(contents.contains("api_key = \"ccgw_test\""));
+            assert!(contents.contains("model_provider = \"openai\""));
+            assert!(contents.contains("openai_base_url = \"https://gw.example.com/openai/v1\""));
+
+            let auth_path = temp.path().join(".codex/auth.json");
+            let auth = std::fs::read_to_string(auth_path).unwrap();
+            assert!(auth.contains("\"auth_mode\": \"apikey\""));
+            assert!(auth.contains("\"OPENAI_API_KEY\": \"ccgw_test\""));
+
+            assert!(matches!(
+                _exports.as_slice(),
+                [config, auth]
+                    if config.starts_with("# wrote ")
+                        && config.ends_with(".codex/config.toml")
+                        && auth.starts_with("# wrote ")
+                        && auth.ends_with(".codex/auth.json")
+            ));
         });
     }
 

@@ -349,6 +349,8 @@ mod profile_tests {
         // Sanity: at least one non-github route exists and loads cleanly.
         assert!(routes.iter().any(|(k, _)| k == "openai"));
         assert!(routes.iter().any(|(k, _)| k == "anthropic"));
+        let ollama = routes.iter().find(|(k, _)| k == "ollama").unwrap();
+        assert_eq!(ollama.1.upstream, "https://ollama.com");
     }
 
     #[test]

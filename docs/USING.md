@@ -115,15 +115,24 @@ coco activate laptop --write --tool codex
 codex
 ```
 
-### Manual env vars
+### Manual Codex setup
 
 ```bash
-export OPENAI_BASE_URL=https://gw.example.com/openai
-export OPENAI_API_KEY=ccgw_...
+mkdir -p ~/.codex
+cat > ~/.codex/config.toml <<'EOF'
+model_provider = "openai"
+openai_base_url = "https://gw.example.com/openai/v1"
+EOF
+cat > ~/.codex/auth.json <<'EOF'
+{
+  "auth_mode": "apikey",
+  "OPENAI_API_KEY": "ccgw_..."
+}
+EOF
 codex
 ```
 
-Codex CLI requires its own config file (`~/.codex/config.toml`) in addition to env vars. `coco activate <token> --write --tool codex` writes it directly when the token can access the `openai` route.
+Codex CLI requires its own config file (`~/.codex/config.toml`) for the gateway base URL and API-key login state in `~/.codex/auth.json`. Its `openai_base_url` must include `/v1` because Codex appends endpoint paths like `/responses`. It does not use `OPENAI_BASE_URL` as the runtime endpoint, and `codex login --with-api-key` only writes API-key auth state; it does not configure the gateway URL. `coco activate <token> --write --tool codex` writes both files when the token can access the `openai` route.
 
 ### Python SDK
 
@@ -131,7 +140,7 @@ Codex CLI requires its own config file (`~/.codex/config.toml`) in addition to e
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="https://gw.example.com/openai",
+    base_url="https://gw.example.com/openai/v1",
     api_key="ccgw_...",   # phantom token
 )
 response = client.chat.completions.create(
@@ -186,7 +195,7 @@ export OLLAMA_HOST=https://gw.example.com/ollama
 ollama run llama3.2
 ```
 
-Requires `OLLAMA_HOST` to be set to the gateway's `/ollama` prefix. The `ollama.json` profile forwards requests to the upstream Ollama server configured via `OLLAMA_HOST` on the gateway side.
+Requires `OLLAMA_HOST` to be set to the gateway's `/ollama` prefix. The gateway forwards Ollama API paths to Ollama Cloud at `https://ollama.com` and injects the real gateway-side `OLLAMA_API_KEY` as `Authorization: Bearer ...`.
 
 ---
 

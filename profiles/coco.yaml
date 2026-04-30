@@ -45,7 +45,7 @@ routes:
         format: "Bearer {}"
 
   ollama:
-    upstream: https://127.0.0.1:11434
+    upstream: https://ollama.com
     credential_sources:
       - env: OLLAMA_API_KEY
         inject_header: Authorization
@@ -138,13 +138,16 @@ tools:
         requires_route: openai
         install_path: ~/.codex/config.toml
         content: |
-          [model]
-          provider = "openai"
-          name = "o4-mini"
-          openai_base_url = "{{route_url:openai}}"
-
-          [auth]
-          api_key = "{{token}}"
+          model_provider = "openai"
+          openai_base_url = "{{route_url:openai}}/v1"
+      - id: auth
+        requires_route: openai
+        install_path: ~/.codex/auth.json
+        content: |
+          {
+            "auth_mode": "apikey",
+            "OPENAI_API_KEY": "{{token}}"
+          }
 
   opencode:
     description: OpenCode config and environment
