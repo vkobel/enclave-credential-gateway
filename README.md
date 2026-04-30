@@ -115,20 +115,20 @@ sed -n '/tokens.gh-local/,$p' ~/.config/coco/config.toml
 
 The saved token is the `ccgw_...` client credential. It is scoped to `github`, so it can use GitHub REST routes, the `gh` `/api/v3/...` compatibility route, and Git smart-HTTP clone/fetch/push routes. It cannot access routes like `openai` or `anthropic`.
 
-### 2. Activate `gh` and Git in the Current Shell
+### 2. Activate `gh` and Git
 
 ```bash
-eval "$(coco activate gh-local --tool gh)"
+coco activate gh-local --tool gh
 ```
 
-That generated shell config does four things:
+Activation does four things:
 
 - `GH_HOST=localhost` tells `gh` to send GitHub API calls to the local gateway host.
 - `GH_ENTERPRISE_TOKEN=ccgw_...` is the token `gh` actually reads for custom hosts.
 - `GH_TOKEN=ccgw_...` is also exported for scripts and manual curl examples.
 - `GIT_CONFIG_GLOBAL=~/.config/coco/generated/gh/gh-local/gitconfig` points Git at a generated config file for the gateway host.
 
-The generated Git config includes your normal `~/.gitconfig`, resets inherited credential helpers for the gateway URL, and then adds `!coco git-credential gh-local`. Re-running the `eval` is safe because the file is regenerated deterministically.
+The generated Git config includes your normal `~/.gitconfig`, resets inherited credential helpers for the gateway URL, and then adds `!coco git-credential gh-local`. Re-running activation is safe because the file is regenerated deterministically. For current-shell activation instead of a subshell, run `eval "$(coco activate gh-local --eval --tool gh)"`.
 
 ### 3. Use `gh` and Git
 
@@ -163,17 +163,17 @@ For longer per-tool setup, see [docs/USING.md](./docs/USING.md).
 
 ```bash
 coco token create --name codex-local --scope openai
-coco activate codex-local --write --tool codex
+coco activate codex-local --tool codex
 codex
 ```
 
-Codex needs `~/.codex/config.toml` for the gateway URL and `~/.codex/auth.json` for API-key auth. The Codex `openai_base_url` must include `/v1`; `OPENAI_BASE_URL` is enough for SDKs and curl, but not for Codex.
+Codex needs config files for the gateway URL and API-key auth. Activation writes generated Codex files under `~/.config/coco/generated/codex/<token>/home` and sets `CODEX_HOME` in the activated subshell. Use `--write --tool codex` only when you want to write persistent files into `~/.codex`.
 
 ### Generic SDKs and curl
 
 ```bash
 coco token create --name sdk-local --scope openai
-eval "$(coco activate sdk-local --tool shell)"
+eval "$(coco activate sdk-local --eval --tool shell)"
 
 curl "$OPENAI_BASE_URL/v1/models" \
   -H "Authorization: Bearer $OPENAI_API_KEY"
@@ -204,9 +204,9 @@ The local `scope` list tells the CLI which environment variables and tool adapte
 Then activate the tool you need:
 
 ```bash
-eval "$(coco activate laptop --tool gh)"
-coco activate laptop --write --tool codex
-eval "$(coco activate laptop --tool shell)"
+coco activate laptop --tool gh
+coco activate laptop --tool codex
+coco activate laptop --tool shell
 ```
 
 ## Routes

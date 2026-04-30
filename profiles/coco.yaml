@@ -132,17 +132,19 @@ tools:
   codex:
     description: OpenAI Codex CLI
     routes: [openai]
-    default_render_file: config
+    env:
+      - key: CODEX_HOME
+        value: "{{generated_root}}/home"
     files:
       - id: config
         requires_route: openai
-        install_path: ~/.codex/config.toml
+        generated_path: "{{generated_root}}/home/config.toml"
         content: |
           model_provider = "openai"
           openai_base_url = "{{route_url:openai}}/v1"
       - id: auth
         requires_route: openai
-        install_path: ~/.codex/auth.json
+        generated_path: "{{generated_root}}/home/auth.json"
         content: |
           {
             "auth_mode": "apikey",
@@ -215,11 +217,10 @@ tools:
     description: Anthropic Claude Code environment
     experimental: true
     routes: [anthropic]
-    default_render_file: env
-    files:
-      - id: env
-        requires_route: anthropic
-        content: |
-          # Experimental: Claude Code support is routed through shell environment variables.
-          export ANTHROPIC_API_KEY="{{token}}"
-          export ANTHROPIC_BASE_URL="{{route_url:anthropic}}"
+    env:
+      - requires_route: anthropic
+        key: ANTHROPIC_API_KEY
+        value: "{{token}}"
+      - requires_route: anthropic
+        key: ANTHROPIC_BASE_URL
+        value: "{{route_url:anthropic}}"

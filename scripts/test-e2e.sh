@@ -328,7 +328,7 @@ if [[ ! -x "$COCO_BIN" ]]; then
   fail "Built coco CLI binary not found at $COCO_BIN"
 fi
 
-if env "${CLI_ENV[@]}" "$COCO_BIN" activate github_only >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
+if env "${CLI_ENV[@]}" "$COCO_BIN" activate github_only --eval >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
   pass "coco activate succeeds for non-OpenAI token"
 else
   fail "coco activate should not fail for non-OpenAI token"
@@ -346,31 +346,19 @@ grep -q "export GH_HOST=localhost:${GATEWAY_PORT}" "$CLI_STDOUT" \
   && pass "non-OpenAI activate does not write Codex config" \
   || fail "non-OpenAI activate wrote Codex config"
 
-if env "${CLI_ENV[@]}" "$COCO_BIN" activate github_only --write --tool codex >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
-  fail "coco activate --write --tool codex should reject non-OpenAI token"
+if env "${CLI_ENV[@]}" "$COCO_BIN" activate laptop --eval --tool codex >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
+  pass "coco activate --eval --tool codex writes generated Codex config"
 else
-  pass "coco activate --write --tool codex rejects non-OpenAI token"
+  fail "coco activate --eval --tool codex should write generated Codex config"
 fi
 
-if env "${CLI_ENV[@]}" "$COCO_BIN" activate laptop --write --tool codex >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
-  pass "coco activate --write --tool codex writes Codex config for all-route token"
-else
-  fail "coco activate --write --tool codex should write Codex config for all-route token"
-fi
+grep -q "export CODEX_HOME=.*\\.config/coco/generated/codex/laptop/home" "$CLI_STDOUT" \
+  && pass "Codex eval exports generated CODEX_HOME" \
+  || fail "Codex eval missing generated CODEX_HOME"
 
-grep -q "openai_base_url = \"http://localhost:${GATEWAY_PORT}/openai/v1\"" "$CLI_HOME/.codex/config.toml" \
-  && pass "Codex config points at gateway OpenAI route" \
-  || fail "Codex config missing gateway OpenAI route"
-
-grep -q "# wrote .*\\.codex/config\\.toml" "$CLI_STDOUT" \
-  && grep -q "# wrote .*\\.codex/auth\\.json" "$CLI_STDOUT" \
-  && pass "coco activate --write reports Codex files" \
-  || fail "coco activate --write did not report Codex files"
-
-grep -q '"auth_mode": "apikey"' "$CLI_HOME/.codex/auth.json" \
-  && grep -q '"OPENAI_API_KEY": "' "$CLI_HOME/.codex/auth.json" \
-  && pass "Codex auth file uses API-key login format" \
-  || fail "Codex auth file missing API-key login fields"
+grep -q "openai_base_url = \"http://localhost:${GATEWAY_PORT}/openai/v1\"" "$CLI_HOME/.config/coco/generated/codex/laptop/home/config.toml" \
+  && pass "Generated Codex config points at gateway OpenAI route" \
+  || fail "Generated Codex config missing gateway OpenAI route"
 
 section "Route: httpbin"
 
@@ -483,7 +471,7 @@ GH_E2E_WORKDIR=$(mktemp -d)
 
 export HOME="$CLI_HOME"
 export PATH="${COCO_BIN%/*}:$PATH"
-eval "$("$COCO_BIN" activate github_only --tool gh)"
+eval "$("$COCO_BIN" activate github_only --eval --tool gh)"
 export GIT_TERMINAL_PROMPT=0
 
 # Resolve authenticated username
@@ -527,7 +515,7 @@ GW_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
   || fail "GitHub REST: view repo → expected 200, got $GW_STATUS"
 
 # Clone via git smart-HTTP. Remote URL has no embedded token; the Git
-# credential helper emitted by `coco activate --tool gh` supplies Basic auth.
+# credential helper emitted by `coco activate --eval --tool gh` supplies Basic auth.
 git_remote="http://localhost:${GATEWAY_PORT}/${GH_E2E_REPO}.git"
 if git clone -q "$git_remote" "${GH_E2E_WORKDIR}/repo" 2>/dev/null; then
   pass "git clone via gateway (smart-HTTP, credential helper)"

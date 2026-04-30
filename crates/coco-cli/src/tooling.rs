@@ -19,11 +19,7 @@ pub struct ToolAdapter {
     #[serde(default)]
     pub routes: Vec<String>,
     #[serde(default)]
-    pub experimental: bool,
-    #[serde(default)]
     pub git_credential_helper: bool,
-    #[serde(default)]
-    pub default_render_file: Option<String>,
     #[serde(default)]
     pub env: Vec<ToolEnvVar>,
     #[serde(default)]
@@ -46,12 +42,55 @@ pub struct ToolFile {
     #[serde(default)]
     pub managed_path: Option<String>,
     #[serde(default)]
-    pub install_path: Option<String>,
+    pub generated_path: Option<String>,
     pub content: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivationMode {
+    Generated,
+    Describe,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvExport {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Activation {
+    pub exports: Vec<EnvExport>,
+    pub files: Vec<PathBuf>,
+}
+
+impl Activation {
+    pub fn shell_lines(&self) -> Vec<String> {
+        self.exports
+            .iter()
+            .map(|export| format!("export {}={}", export.key, shell_word(&export.value)))
+            .chain(
+                self.files
+                    .iter()
+                    .map(|path| format!("# wrote {}", path.display())),
+            )
+            .collect()
+    }
+
+    pub fn describe_lines(&self) -> Vec<String> {
+        self.exports
+            .iter()
+            .map(|export| format!("export {}={}", export.key, export.value))
+            .chain(
+                self.files
+                    .iter()
+                    .map(|path| format!("write {}", path.display())),
+            )
+            .collect()
+    }
+}
+
 struct ToolContext<'a> {
-    tool: &'a str,
     token_name: &'a str,
     token_value: &'a str,
     gateway_url: &'a str,
@@ -61,64 +100,13 @@ struct ToolContext<'a> {
     route_filter: Option<&'a str>,
 }
 
-pub fn get_tool_adapter(name: &str) -> Result<ToolAdapter> {
-    let mut manifest = load_manifest()?;
-    manifest
-        .tools
-        .remove(name)
-        .ok_or_else(|| anyhow!("Unknown tool adapter '{}'", name))
-}
-
-pub fn render_tool_file_by_id(
-    config: &Config,
-    tool: &str,
-    token_name: &str,
-    file_id: Option<&str>,
-) -> Result<String> {
-    let adapter = get_tool_adapter(tool)?;
-    let ctx = ToolContext::new(config, token_name, tool, None)?;
-    let managed_files = materialize_managed_files(tool, &adapter, &ctx)?;
-    let file = match file_id {
-        Some(file_id) => adapter
-            .files
-            .iter()
-            .find(|file| file.id == file_id)
-            .ok_or_else(|| anyhow!("Tool references unknown file '{}'", file_id))?,
-        None => default_render_file(&adapter)?,
-    };
-    ensure_route_allowed(&ctx, file)?;
-    render_template(&file.content, &ctx, &managed_files)
-}
-
-fn write_install_file(
-    tool: &str,
-    file: &ToolFile,
-    ctx: &ToolContext<'_>,
-    managed_files: &HashMap<String, PathBuf>,
-) -> Result<PathBuf> {
-    let install_path = file
-        .install_path
-        .as_ref()
-        .ok_or_else(|| anyhow!("Tool '{}' does not define an install path", tool))?;
-    let install_path = render_template(install_path, ctx, managed_files)?;
-    let install_path = Config::expand_home(&install_path);
-    let content = render_template(&file.content, ctx, managed_files)?;
-
-    if let Some(parent) = install_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&install_path, content)?;
-
-    Ok(install_path)
-}
-
 pub fn activate(
     config: &Config,
     token_name: &str,
     tool_filter: Option<&[String]>,
     route_filter: Option<&str>,
-    write: bool,
-) -> Result<Vec<String>> {
+    mode: ActivationMode,
+) -> Result<Activation> {
     let manifest = load_manifest()?;
     if let Some(route_filter) = route_filter {
         if !manifest.routes.contains_key(route_filter) {
@@ -141,8 +129,7 @@ pub fn activate(
             }
         }
     }
-    let mut exports: Vec<(String, String)> = Vec::new();
-    let mut write_messages: Vec<String> = Vec::new();
+    let mut activation = Activation::default();
 
     for (tool, adapter) in manifest.tools {
         if let Some(tool_filter) = tool_filter {
@@ -163,47 +150,43 @@ pub fn activate(
             continue;
         }
 
-        let managed_files = materialize_managed_files(&tool, &adapter, &ctx)?;
+        let managed_files = materialize_managed_files(&tool, &adapter, &ctx, mode)?;
+        activation.files.extend(managed_files.values().cloned());
         for env in &adapter.env {
             if !ctx.has_route(env.requires_route.as_deref()) {
                 continue;
             }
             let value = render_template(&env.value, &ctx, &managed_files)?;
-            push_export(
-                &mut exports,
-                env.key.clone(),
-                format!("export {}={}", env.key, value),
-            );
+            push_export(&mut activation.exports, env.key.clone(), value);
         }
 
         if adapter.git_credential_helper && ctx.has_route(Some("github")) {
-            let gitconfig = materialize_git_credential_config(&tool, &ctx)?;
+            let gitconfig = materialize_git_credential_config(&tool, &ctx, mode)?;
+            activation.files.push(gitconfig.clone());
             push_export(
-                &mut exports,
+                &mut activation.exports,
                 "GIT_CONFIG_GLOBAL".to_string(),
-                format!("export GIT_CONFIG_GLOBAL={}", gitconfig.display()),
+                gitconfig.display().to_string(),
             );
         }
 
-        if write {
-            for path in install_tool_files(&tool, &adapter, &ctx, &managed_files)? {
-                write_messages.push(format!("# wrote {}", path.display()));
-            }
-        }
+        activation.files.extend(install_tool_files(
+            &tool,
+            &adapter,
+            &ctx,
+            &managed_files,
+            mode,
+        )?);
     }
 
-    Ok(exports
-        .into_iter()
-        .map(|(_, line)| line)
-        .chain(write_messages)
-        .collect())
+    Ok(activation)
 }
 
-fn push_export(exports: &mut Vec<(String, String)>, key: String, line: String) {
-    if let Some(pos) = exports.iter().position(|(existing, _)| existing == &key) {
+fn push_export(exports: &mut Vec<EnvExport>, key: String, value: String) {
+    if let Some(pos) = exports.iter().position(|export| export.key == key) {
         exports.remove(pos);
     }
-    exports.push((key, line));
+    exports.push(EnvExport { key, value });
 }
 
 fn tool_applies(adapter: &ToolAdapter, ctx: &ToolContext<'_>) -> bool {
@@ -222,13 +205,25 @@ fn install_tool_files(
     adapter: &ToolAdapter,
     ctx: &ToolContext<'_>,
     managed_files: &HashMap<String, PathBuf>,
+    mode: ActivationMode,
 ) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     for file in &adapter.files {
-        if !ctx.has_route(file.requires_route.as_deref()) || file.install_path.is_none() {
+        if !ctx.has_route(file.requires_route.as_deref()) {
             continue;
         }
-        paths.push(write_install_file(tool, file, ctx, managed_files)?);
+        let target = file.generated_path.as_ref();
+        let Some(target) = target else {
+            continue;
+        };
+        paths.push(write_tool_file(
+            tool,
+            file,
+            target,
+            ctx,
+            managed_files,
+            mode,
+        )?);
     }
     Ok(paths)
 }
@@ -251,6 +246,7 @@ fn materialize_managed_files(
     tool: &str,
     adapter: &ToolAdapter,
     ctx: &ToolContext<'_>,
+    mode: ActivationMode,
 ) -> Result<HashMap<String, PathBuf>> {
     let mut managed_files = HashMap::new();
 
@@ -266,15 +262,40 @@ fn materialize_managed_files(
             .generated_root
             .join(validate_managed_path(relative_path)?);
         let content = render_template(&file.content, ctx, &managed_files)?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+        if mode != ActivationMode::Describe {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&path, content)
+                .with_context(|| format!("Failed to write managed file for tool '{}'", tool))?;
         }
-        std::fs::write(&path, content)
-            .with_context(|| format!("Failed to write managed file for tool '{}'", tool))?;
         managed_files.insert(file.id.clone(), path);
     }
 
     Ok(managed_files)
+}
+
+fn write_tool_file(
+    tool: &str,
+    file: &ToolFile,
+    target: &str,
+    ctx: &ToolContext<'_>,
+    managed_files: &HashMap<String, PathBuf>,
+    mode: ActivationMode,
+) -> Result<PathBuf> {
+    let target = render_template(target, ctx, managed_files)?;
+    let path = Config::expand_home(&target);
+    let content = render_template(&file.content, ctx, managed_files)?;
+
+    if mode != ActivationMode::Describe {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, content)
+            .with_context(|| format!("Failed to write config file for tool '{}'", tool))?;
+    }
+
+    Ok(path)
 }
 
 fn render_template(
@@ -297,6 +318,7 @@ fn render_template(
             "token_name" => ctx.token_name.to_string(),
             "gateway_url" => ctx.gateway_url.to_string(),
             "gateway_host" => ctx.gateway_host.clone(),
+            "generated_root" => ctx.generated_root.display().to_string(),
             _ => {
                 if let Some(route) = token.strip_prefix("route_url:") {
                     format!("{}/{}", ctx.gateway_url, route)
@@ -318,7 +340,11 @@ fn render_template(
     Ok(rendered)
 }
 
-fn materialize_git_credential_config(tool: &str, ctx: &ToolContext<'_>) -> Result<PathBuf> {
+fn materialize_git_credential_config(
+    tool: &str,
+    ctx: &ToolContext<'_>,
+    mode: ActivationMode,
+) -> Result<PathBuf> {
     let path = ctx.generated_root.join("gitconfig");
     let helper = format!("!coco git-credential {}", shell_word(ctx.token_name));
     let content = format!(
@@ -327,11 +353,14 @@ fn materialize_git_credential_config(tool: &str, ctx: &ToolContext<'_>) -> Resul
         helper.replace('"', "\\\"")
     );
 
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    if mode != ActivationMode::Describe {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, content).with_context(|| {
+            format!("Failed to write Git credential config for tool '{}'", tool)
+        })?;
     }
-    std::fs::write(&path, content)
-        .with_context(|| format!("Failed to write Git credential config for tool '{}'", tool))?;
     Ok(path)
 }
 
@@ -354,32 +383,7 @@ fn shell_word(value: &str) -> String {
     }
 }
 
-fn default_render_file(adapter: &ToolAdapter) -> Result<&ToolFile> {
-    let file_id = adapter
-        .default_render_file
-        .as_deref()
-        .ok_or_else(|| anyhow!("Tool does not define a default renderable file"))?;
 
-    adapter
-        .files
-        .iter()
-        .find(|file| file.id == file_id)
-        .ok_or_else(|| anyhow!("Tool references unknown file '{}'", file_id))
-}
-
-fn ensure_route_allowed(ctx: &ToolContext<'_>, file: &ToolFile) -> Result<()> {
-    if ctx.has_route(file.requires_route.as_deref()) {
-        Ok(())
-    } else {
-        let route = file.requires_route.as_deref().unwrap_or("<unspecified>");
-        bail!(
-            "Token '{}' is not scoped for route '{}' required by tool '{}'",
-            ctx.token_name,
-            route,
-            ctx.tool
-        )
-    }
-}
 
 fn validate_managed_path(path: &str) -> Result<PathBuf> {
     let managed_path = Path::new(path);
@@ -412,7 +416,6 @@ impl<'a> ToolContext<'a> {
             .ok_or_else(|| anyhow!("Token '{}' not found in config", token_name))?;
         let gateway_url = config.gateway_url.trim_end_matches('/');
         Ok(Self {
-            tool,
             token_name,
             token_value: &entry.token,
             gateway_url,
@@ -448,7 +451,7 @@ fn host_only(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{activate, get_tool_adapter, render_tool_file_by_id, validate_managed_path};
+    use super::{activate, validate_managed_path, ActivationMode, EnvExport};
     use crate::config::{Config, TokenEntry};
     use crate::test_support::with_temp_config_root;
     use std::collections::HashMap;
@@ -483,21 +486,54 @@ mod tests {
     fn shell_adapter_preserves_existing_exports() {
         with_temp_config_root(|_temp| {
             let config = config_with_scope(&["anthropic", "openai", "github", "ollama", "httpbin"]);
-            let exports =
-                activate(&config, "laptop", Some(&["shell".to_string()]), None, false).unwrap();
+            let activation = activate(
+                &config,
+                "laptop",
+                Some(&["shell".to_string()]),
+                None,
+                ActivationMode::Generated,
+            )
+            .unwrap();
 
             assert_eq!(
-                exports,
+                activation.exports,
                 vec![
-                    "export ANTHROPIC_BASE_URL=https://gw.example.com/anthropic",
-                    "export ANTHROPIC_API_KEY=ccgw_test",
-                    "export OPENAI_BASE_URL=https://gw.example.com/openai",
-                    "export OPENAI_API_KEY=ccgw_test",
-                    "export GH_HOST=gw.example.com",
-                    "export GH_ENTERPRISE_TOKEN=ccgw_test",
-                    "export GH_TOKEN=ccgw_test",
-                    "export OLLAMA_HOST=https://gw.example.com/ollama",
-                    "export HTTPBIN_TOKEN=ccgw_test",
+                    EnvExport {
+                        key: "ANTHROPIC_BASE_URL".to_string(),
+                        value: "https://gw.example.com/anthropic".to_string()
+                    },
+                    EnvExport {
+                        key: "ANTHROPIC_API_KEY".to_string(),
+                        value: "ccgw_test".to_string()
+                    },
+                    EnvExport {
+                        key: "OPENAI_BASE_URL".to_string(),
+                        value: "https://gw.example.com/openai".to_string()
+                    },
+                    EnvExport {
+                        key: "OPENAI_API_KEY".to_string(),
+                        value: "ccgw_test".to_string()
+                    },
+                    EnvExport {
+                        key: "GH_HOST".to_string(),
+                        value: "gw.example.com".to_string()
+                    },
+                    EnvExport {
+                        key: "GH_ENTERPRISE_TOKEN".to_string(),
+                        value: "ccgw_test".to_string()
+                    },
+                    EnvExport {
+                        key: "GH_TOKEN".to_string(),
+                        value: "ccgw_test".to_string()
+                    },
+                    EnvExport {
+                        key: "OLLAMA_HOST".to_string(),
+                        value: "https://gw.example.com/ollama".to_string()
+                    },
+                    EnvExport {
+                        key: "HTTPBIN_TOKEN".to_string(),
+                        value: "ccgw_test".to_string()
+                    },
                 ]
             );
         });
@@ -507,19 +543,37 @@ mod tests {
     fn gh_adapter_exports_enterprise_credentials() {
         with_temp_config_root(|temp| {
             let config = config_with_scope(&["github"]);
-            let exports =
-                activate(&config, "laptop", Some(&["gh".to_string()]), None, false).unwrap();
+            let activation = activate(
+                &config,
+                "laptop",
+                Some(&["gh".to_string()]),
+                None,
+                ActivationMode::Generated,
+            )
+            .unwrap();
             let gitconfig = temp
                 .path()
                 .join(".config/coco/generated/gh/laptop/gitconfig");
 
             assert_eq!(
-                exports,
+                activation.exports,
                 vec![
-                    "export GH_HOST=gw.example.com".to_string(),
-                    "export GH_ENTERPRISE_TOKEN=ccgw_test".to_string(),
-                    "export GH_TOKEN=ccgw_test".to_string(),
-                    format!("export GIT_CONFIG_GLOBAL={}", gitconfig.display()),
+                    EnvExport {
+                        key: "GH_HOST".to_string(),
+                        value: "gw.example.com".to_string()
+                    },
+                    EnvExport {
+                        key: "GH_ENTERPRISE_TOKEN".to_string(),
+                        value: "ccgw_test".to_string()
+                    },
+                    EnvExport {
+                        key: "GH_TOKEN".to_string(),
+                        value: "ccgw_test".to_string()
+                    },
+                    EnvExport {
+                        key: "GIT_CONFIG_GLOBAL".to_string(),
+                        value: gitconfig.display().to_string()
+                    },
                 ]
             );
             let contents = std::fs::read_to_string(gitconfig).unwrap();
@@ -534,13 +588,23 @@ mod tests {
     fn all_routes_token_activates_scoped_tools() {
         with_temp_config_root(|_temp| {
             let config = config_with_all_routes();
-            let exports =
-                activate(&config, "laptop", Some(&["gh".to_string()]), None, false).unwrap();
+            let activation = activate(
+                &config,
+                "laptop",
+                Some(&["gh".to_string()]),
+                None,
+                ActivationMode::Generated,
+            )
+            .unwrap();
 
-            assert!(exports.contains(&"export GH_HOST=gw.example.com".to_string()));
-            assert!(exports
+            assert!(activation
+                .exports
                 .iter()
-                .any(|line| line.starts_with("export GIT_CONFIG_GLOBAL=")));
+                .any(|export| export.key == "GH_HOST" && export.value == "gw.example.com"));
+            assert!(activation
+                .exports
+                .iter()
+                .any(|export| export.key == "GIT_CONFIG_GLOBAL"));
         });
     }
 
@@ -548,12 +612,12 @@ mod tests {
     fn opencode_env_materializes_managed_config() {
         with_temp_config_root(|temp| {
             let config = config_with_scope(&["openai", "anthropic"]);
-            let exports = activate(
+            let activation = activate(
                 &config,
                 "laptop",
                 Some(&["opencode".to_string()]),
                 None,
-                false,
+                ActivationMode::Generated,
             )
             .unwrap();
 
@@ -561,68 +625,49 @@ mod tests {
                 .path()
                 .join(".config/coco/generated/opencode/laptop/opencode.json");
             assert!(expected_path.exists());
-            assert!(exports.contains(&format!(
-                "export OPENCODE_CONFIG={}",
-                expected_path.display()
-            )));
-            assert!(exports.contains(&"export OPENAI_API_KEY=ccgw_test".to_string()));
-            assert!(exports.contains(&"export ANTHROPIC_API_KEY=ccgw_test".to_string()));
+            assert!(activation.exports.contains(&EnvExport {
+                key: "OPENCODE_CONFIG".to_string(),
+                value: expected_path.display().to_string()
+            }));
+            assert!(activation.exports.contains(&EnvExport {
+                key: "OPENAI_API_KEY".to_string(),
+                value: "ccgw_test".to_string()
+            }));
+            assert!(activation.exports.contains(&EnvExport {
+                key: "ANTHROPIC_API_KEY".to_string(),
+                value: "ccgw_test".to_string()
+            }));
         });
     }
 
     #[test]
-    fn codex_install_writes_default_config() {
+    fn codex_generated_activation_sets_codex_home() {
         with_temp_config_root(|temp| {
             let config = config_with_scope(&["openai"]);
-            let _exports =
-                activate(&config, "laptop", Some(&["codex".to_string()]), None, true).unwrap();
+            let activation = activate(
+                &config,
+                "laptop",
+                Some(&["codex".to_string()]),
+                None,
+                ActivationMode::Generated,
+            )
+            .unwrap();
 
-            let expected = temp.path().join(".codex/config.toml");
+            let codex_home = temp.path().join(".config/coco/generated/codex/laptop/home");
+            assert!(activation.exports.contains(&EnvExport {
+                key: "CODEX_HOME".to_string(),
+                value: codex_home.display().to_string()
+            }));
+
+            let expected = codex_home.join("config.toml");
             let contents = std::fs::read_to_string(expected).unwrap();
             assert!(contents.contains("model_provider = \"openai\""));
             assert!(contents.contains("openai_base_url = \"https://gw.example.com/openai/v1\""));
 
-            let auth_path = temp.path().join(".codex/auth.json");
+            let auth_path = codex_home.join("auth.json");
             let auth = std::fs::read_to_string(auth_path).unwrap();
             assert!(auth.contains("\"auth_mode\": \"apikey\""));
             assert!(auth.contains("\"OPENAI_API_KEY\": \"ccgw_test\""));
-
-            assert!(matches!(
-                _exports.as_slice(),
-                [config, auth]
-                    if config.starts_with("# wrote ")
-                        && config.ends_with(".codex/config.toml")
-                        && auth.starts_with("# wrote ")
-                        && auth.ends_with(".codex/auth.json")
-            ));
-        });
-    }
-
-    #[test]
-    fn experimental_claude_render_is_available() {
-        with_temp_config_root(|_temp| {
-            let config = config_with_scope(&["anthropic"]);
-            let adapter = get_tool_adapter("claude-code").unwrap();
-            assert!(adapter.experimental);
-
-            let render =
-                render_tool_file_by_id(&config, "claude-code", "laptop", Some("env")).unwrap();
-            assert!(render.contains("export ANTHROPIC_API_KEY=\"ccgw_test\""));
-            assert!(
-                render.contains("export ANTHROPIC_BASE_URL=\"https://gw.example.com/anthropic\"")
-            );
-        });
-    }
-
-    #[test]
-    fn default_file_error_names_tool_and_required_route() {
-        with_temp_config_root(|_temp| {
-            let config = config_with_scope(&["github"]);
-            let error = render_tool_file_by_id(&config, "codex", "laptop", None).unwrap_err();
-            let message = error.to_string();
-
-            assert!(message.contains("tool 'codex'"));
-            assert!(message.contains("route 'openai'"));
         });
     }
 

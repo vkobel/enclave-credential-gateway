@@ -20,18 +20,18 @@ enum Commands {
     Activate {
         /// Token name from config [tokens] section
         name: String,
-        /// Also write installable tool config files
+        /// Print eval-safe shell exports instead of launching an activated subshell
         #[arg(long)]
-        write: bool,
+        eval: bool,
+        /// Describe activation actions without applying them
+        #[arg(long)]
+        describe: bool,
         /// Restrict to one or more tool adapters
         #[arg(long, value_delimiter = ',')]
         tool: Vec<String>,
         /// Restrict emitted route-specific entries to one route
         #[arg(long)]
         route: Option<String>,
-        /// Render TOOL or TOOL:FILE and exit without shell exports
-        #[arg(long)]
-        render: Option<String>,
     },
     /// Manage gateway tokens
     Token {
@@ -77,11 +77,11 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Activate {
             name,
-            write,
+            eval,
+            describe,
             tool,
             route,
-            render,
-        } => commands::activate::run(&name, write, &tool, route.as_deref(), render.as_deref())?,
+        } => commands::activate::run(&name, eval, describe, &tool, route.as_deref())?,
         Commands::Token { action } => match action {
             TokenAction::Create {
                 name,
