@@ -248,6 +248,8 @@ mod tests {
             inject_header: "x-api-key".to_string(),
             format: "{}".to_string(),
             prefix: None,
+            reject_prefixes: vec![],
+            extra_headers: std::collections::BTreeMap::new(),
             basic_user: None,
         }
     }

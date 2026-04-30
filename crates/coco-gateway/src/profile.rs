@@ -15,6 +15,13 @@ pub struct CredentialSource {
     pub format: String,
     #[serde(default)]
     pub prefix: Option<String>,
+    /// Reject env values with these prefixes. This lets route profiles keep
+    /// backwards-compatible env names while refusing client-side phantom tokens.
+    #[serde(default)]
+    pub reject_prefixes: Vec<String>,
+    /// Static headers to add when this credential source is selected.
+    #[serde(default)]
+    pub extra_headers: BTreeMap<String, String>,
     /// When set, the credential is injected as HTTP Basic auth:
     /// `Basic base64("<basic_user>:<credential>")`. The `format` field is ignored.
     #[serde(default)]

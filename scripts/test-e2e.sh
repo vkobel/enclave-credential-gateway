@@ -374,6 +374,8 @@ section "Route: anthropic"
 
 if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
   skip "ANTHROPIC_API_KEY not set — skipping Anthropic test"
+elif [[ "${ANTHROPIC_API_KEY}" == ccgw_* ]]; then
+  skip "ANTHROPIC_API_KEY contains a CoCo phantom token — set it to the real Anthropic key for live gateway tests"
 elif [[ "${COCO_TEST_ANTHROPIC_MODE:-apikey}" == "oauth" ]]; then
   info "COCO_TEST_ANTHROPIC_MODE=oauth — testing Claude Code OAuth path"
   GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
@@ -381,7 +383,6 @@ elif [[ "${COCO_TEST_ANTHROPIC_MODE:-apikey}" == "oauth" ]]; then
     -H "Authorization: Bearer ${ALL_TOKEN}" \
     -H "Content-Type: application/json" \
     -H "anthropic-version: 2023-06-01" \
-    -H "anthropic-beta: oauth-2025-04-20" \
     -d '{
       "model": "claude-haiku-4-5-20251001",
       "max_tokens": 8,

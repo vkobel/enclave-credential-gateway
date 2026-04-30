@@ -216,7 +216,7 @@ Token scopes use the top-level route key. Unrestricted tokens are explicit: crea
 | Path prefix | Scope | Upstream | Gateway credential env | Injection |
 |---|---|---|---|---|
 | `/openai/...` | `openai` | `https://api.openai.com` | `OPENAI_API_KEY` | `Authorization: Bearer ...` |
-| `/anthropic/...` | `anthropic` | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` | OAuth tokens as `Authorization: Bearer ...`, API keys as `x-api-key` |
+| `/anthropic/...` | `anthropic` | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` | OAuth tokens as `Authorization: Bearer ...` plus `anthropic-beta: oauth-2025-04-20`; API keys as `x-api-key`; rejects `ccgw_...` phantom values upstream |
 | `/github/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` | `Authorization: Bearer ...` |
 | `/api/v3/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` | `gh` compatibility route; strips route-relative `/v3` |
 | `/<owner>/<repo>.git/{info/refs,git-upload-pack,git-receive-pack}` | `github` | `https://github.com` | `GITHUB_TOKEN` | Git smart-HTTP; accepts HTTP Basic auth |
@@ -256,7 +256,7 @@ Supported fields:
 | Field | Purpose |
 |---|---|
 | `upstream` | Base upstream URL |
-| `credential_sources` | Ordered env-backed credentials with `env`, `inject_header`, optional `format`, and optional `prefix` |
+| `credential_sources` | Ordered env-backed credentials with `env`, `inject_header`, optional `format`, optional `prefix`, optional `reject_prefixes`, and optional `extra_headers` |
 | `aliases` | Optional compatibility prefixes owned by this route, such as GitHub's `api` alias |
 | `strip_prefix` | Alias path prefix to remove before forwarding |
 | `inject_mode` | `header` or `url_path`; defaults to `header` |

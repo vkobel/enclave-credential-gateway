@@ -92,11 +92,17 @@ export ANTHROPIC_API_KEY=ccgw_...    # phantom token — gateway swaps in the re
 claude
 ```
 
+The gateway process must have the real Anthropic credential in `ANTHROPIC_API_KEY`.
+The Claude Code client shell also uses `ANTHROPIC_API_KEY`, but there it must be
+the `ccgw_...` phantom token. Keep those environments separate: do not start or
+restart the gateway from a shell where `ANTHROPIC_API_KEY` has already been
+changed to the client phantom token.
+
 ### What happens
 
-Claude Code sends `x-api-key: <phantom>` (or `Authorization: Bearer <phantom>` for OAuth sessions). The gateway validates the phantom, strips it, and injects the real `ANTHROPIC_API_KEY` in the correct header before forwarding to `api.anthropic.com`.
+Claude Code sends `x-api-key: <phantom>` (or `Authorization: Bearer <phantom>` for OAuth sessions). The gateway validates the phantom, strips it, and injects the real upstream Anthropic credential in the correct header before forwarding to `api.anthropic.com`.
 
-For Anthropic OAuth tokens (`sk-ant-oat...`) the gateway injects `Authorization: Bearer <token>`. For regular API keys it injects `x-api-key: <key>`. The detection is automatic based on the `sk-ant-oat` prefix.
+For Anthropic OAuth tokens (`sk-ant-oat...`) the gateway injects `Authorization: Bearer <token>` and adds `anthropic-beta: oauth-2025-04-20`. For regular API keys it injects `x-api-key: <key>`. The detection is automatic based on the real upstream credential prefix, and `ccgw_...` phantom tokens are rejected as upstream credentials.
 
 ---
 
