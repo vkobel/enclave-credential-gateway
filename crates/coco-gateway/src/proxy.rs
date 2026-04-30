@@ -77,7 +77,11 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
 
     let mut headers = req.headers().clone();
 
-    headers.remove(phantom_auth.header.as_str());
+    remove_client_credential_headers(
+        &mut headers,
+        &entry.credential_sources,
+        phantom_auth.header.as_str(),
+    );
     headers.remove("host");
 
     // Only inject credential into headers for Header mode
@@ -95,6 +99,7 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
                     .unwrap_or_else(|_| HeaderValue::from_static("")),
             );
         }
+        insert_extra_headers(&mut headers, src);
     }
 
     let upstream_host = upstream_uri.host().unwrap_or("");
@@ -141,17 +146,75 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request<Body
     }
 }
 
+fn remove_client_credential_headers(
+    headers: &mut axum::http::HeaderMap,
+    sources: &[CredentialSource],
+    phantom_header: &str,
+) {
+    for src in sources {
+        headers.remove(src.inject_header.as_str());
+    }
+    headers.remove(phantom_header);
+}
+
+fn insert_extra_headers(headers: &mut axum::http::HeaderMap, src: &CredentialSource) {
+    for (name, value) in &src.extra_headers {
+        let Ok(header_name) = HeaderName::from_bytes(name.as_bytes()) else {
+            warn!("Skipping invalid extra header name '{}'", name);
+            continue;
+        };
+        let Ok(header_value) = HeaderValue::from_str(value) else {
+            warn!("Skipping invalid extra header value for '{}'", name);
+            continue;
+        };
+
+        if let Some(existing) = headers.get(&header_name) {
+            let Ok(existing) = existing.to_str() else {
+                headers.append(header_name, header_value);
+                continue;
+            };
+            if existing
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case(value))
+            {
+                continue;
+            }
+            let combined = format!("{}, {}", existing, value);
+            match HeaderValue::from_str(&combined) {
+                Ok(combined) => {
+                    headers.insert(header_name, combined);
+                }
+                Err(_) => {
+                    headers.append(header_name, header_value);
+                }
+            };
+        } else {
+            headers.insert(header_name, header_value);
+        }
+    }
+}
+
 pub fn resolve_credential(
     sources: &[CredentialSource],
     preferred: Option<usize>,
 ) -> Option<(&CredentialSource, String)> {
+    resolve_credential_with(sources, preferred, |env| std::env::var(env).ok())
+}
+
+fn resolve_credential_with(
+    sources: &[CredentialSource],
+    preferred: Option<usize>,
+    mut get_env: impl FnMut(&str) -> Option<String>,
+) -> Option<(&CredentialSource, String)> {
     let matches = |src: &CredentialSource, v: &str| -> bool {
-        !v.is_empty() && src.prefix.as_deref().is_none_or(|p| v.starts_with(p))
+        !v.is_empty()
+            && src.prefix.as_deref().is_none_or(|p| v.starts_with(p))
+            && !src.reject_prefixes.iter().any(|p| v.starts_with(p))
     };
 
     if let Some(i) = preferred {
         if let Some(src) = sources.get(i) {
-            if let Ok(v) = std::env::var(&src.env) {
+            if let Some(v) = get_env(&src.env) {
                 if matches(src, &v) {
                     return Some((src, v));
                 }
@@ -159,9 +222,146 @@ pub fn resolve_credential(
         }
     }
     sources.iter().find_map(|src| {
-        std::env::var(&src.env)
-            .ok()
+        get_env(&src.env)
             .filter(|v| matches(src, v))
             .map(|v| (src, v))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{insert_extra_headers, remove_client_credential_headers, resolve_credential_with};
+    use crate::profile::CredentialSource;
+    use axum::http::{HeaderMap, HeaderValue};
+    use std::collections::BTreeMap;
+
+    fn source(header: &str) -> CredentialSource {
+        CredentialSource {
+            env: "TOKEN".to_string(),
+            inject_header: header.to_string(),
+            format: "{}".to_string(),
+            prefix: None,
+            reject_prefixes: vec![],
+            extra_headers: BTreeMap::new(),
+            basic_user: None,
+        }
+    }
+
+    fn anthropic_source(header: &str, prefix: Option<&str>) -> CredentialSource {
+        CredentialSource {
+            env: "ANTHROPIC_API_KEY".to_string(),
+            inject_header: header.to_string(),
+            format: if header == "Authorization" {
+                "Bearer {}".to_string()
+            } else {
+                "{}".to_string()
+            },
+            prefix: prefix.map(str::to_string),
+            reject_prefixes: vec![],
+            extra_headers: BTreeMap::new(),
+            basic_user: None,
+        }
+    }
+
+    #[test]
+    fn removes_all_route_credential_headers_before_injecting_upstream_secret() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer claude-ai"),
+        );
+        headers.insert("x-api-key", HeaderValue::from_static("ccgw_test"));
+        headers.insert("content-type", HeaderValue::from_static("application/json"));
+
+        remove_client_credential_headers(
+            &mut headers,
+            &[source("Authorization"), source("x-api-key")],
+            "x-api-key",
+        );
+
+        assert!(!headers.contains_key("authorization"));
+        assert!(!headers.contains_key("x-api-key"));
+        assert!(headers.contains_key("content-type"));
+    }
+
+    #[test]
+    fn inserts_extra_headers_for_selected_credential_source() {
+        let mut source = anthropic_source("Authorization", Some("sk-ant-oat"));
+        source
+            .extra_headers
+            .insert("anthropic-beta".to_string(), "oauth-2025-04-20".to_string());
+        let mut headers = HeaderMap::new();
+
+        insert_extra_headers(&mut headers, &source);
+
+        assert_eq!(headers.get("anthropic-beta").unwrap(), "oauth-2025-04-20");
+    }
+
+    #[test]
+    fn extra_headers_append_without_duplicate_beta_values() {
+        let mut source = anthropic_source("Authorization", Some("sk-ant-oat"));
+        source
+            .extra_headers
+            .insert("anthropic-beta".to_string(), "oauth-2025-04-20".to_string());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "anthropic-beta",
+            HeaderValue::from_static("other-beta-2025-01-01"),
+        );
+
+        insert_extra_headers(&mut headers, &source);
+        insert_extra_headers(&mut headers, &source);
+
+        assert_eq!(
+            headers.get("anthropic-beta").unwrap(),
+            "other-beta-2025-01-01, oauth-2025-04-20"
+        );
+    }
+
+    #[test]
+    fn unpreferred_anthropic_resolution_uses_secret_prefix() {
+        let sources = [
+            anthropic_source("Authorization", Some("sk-ant-oat")),
+            anthropic_source("x-api-key", None),
+        ];
+
+        let resolved = resolve_credential_with(&sources, None, |env| match env {
+            "ANTHROPIC_API_KEY" => Some("sk-ant-oat-local".to_string()),
+            _ => None,
+        })
+        .expect("credential should resolve");
+
+        assert_eq!(resolved.0.inject_header, "Authorization");
+        assert_eq!(resolved.1, "sk-ant-oat-local");
+    }
+
+    #[test]
+    fn anthropic_resolution_rejects_phantom_tokens_as_upstream_secrets() {
+        let mut apikey = anthropic_source("x-api-key", None);
+        apikey.reject_prefixes = vec!["ccgw_".to_string()];
+        let sources = [apikey];
+
+        let resolved = resolve_credential_with(&sources, None, |env| match env {
+            "ANTHROPIC_API_KEY" => Some("ccgw_client_phantom".to_string()),
+            _ => None,
+        });
+
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn preferred_anthropic_api_key_source_does_not_steal_oauth_tokens() {
+        let auth = anthropic_source("Authorization", Some("sk-ant-oat"));
+        let mut apikey = anthropic_source("x-api-key", None);
+        apikey.reject_prefixes = vec!["sk-ant-oat".to_string()];
+        let sources = [auth, apikey];
+
+        let resolved = resolve_credential_with(&sources, Some(1), |env| match env {
+            "ANTHROPIC_API_KEY" => Some("sk-ant-oat-local".to_string()),
+            _ => None,
+        })
+        .expect("credential should resolve");
+
+        assert_eq!(resolved.0.inject_header, "Authorization");
+    }
 }

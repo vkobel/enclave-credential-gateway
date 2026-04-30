@@ -76,7 +76,7 @@ For a real hostname, set `COCO_DOMAIN=gw.example.com` before `docker compose up`
 
 ### 3. Install and Configure the CLI
 
-Build the CLI and put it on your `PATH`. The Git credential helper path used by `coco tool env gh` relies on `coco` being executable from the shell where Git runs.
+Build the CLI and put it on your `PATH`. The Git credential helper path used by `coco activate --tool gh` relies on `coco` being executable from the shell where Git runs.
 
 ```bash
 cargo build --release -p coco-cli
@@ -118,7 +118,7 @@ The saved token is the `ccgw_...` client credential. It is scoped to `github`, s
 ### 2. Activate `gh` and Git in the Current Shell
 
 ```bash
-eval "$(coco tool env gh gh-local)"
+eval "$(coco activate gh-local --tool gh)"
 ```
 
 That generated shell config does four things:
@@ -126,9 +126,9 @@ That generated shell config does four things:
 - `GH_HOST=localhost` tells `gh` to send GitHub API calls to the local gateway host.
 - `GH_ENTERPRISE_TOKEN=ccgw_...` is the token `gh` actually reads for custom hosts.
 - `GH_TOKEN=ccgw_...` is also exported for scripts and manual curl examples.
-- `GIT_CONFIG_COUNT` plus `GIT_CONFIG_KEY_*` / `GIT_CONFIG_VALUE_*` install a session-scoped Git credential helper for `https://localhost`.
+- `GIT_CONFIG_GLOBAL=~/.config/coco/generated/gh/gh-local/gitconfig` points Git at a generated config file for the gateway host.
 
-The Git env config is intentionally in the shell instead of `~/.gitconfig`: it affects only this terminal session and only the gateway host. Re-running the `eval` is safe; the adapter replaces its existing gateway helper entries instead of growing duplicate config entries.
+The generated Git config includes your normal `~/.gitconfig`, resets inherited credential helpers for the gateway URL, and then adds `!coco git-credential gh-local`. Re-running the `eval` is safe because the file is regenerated deterministically.
 
 ### 3. Use `gh` and Git
 
@@ -163,17 +163,15 @@ For longer per-tool setup, see [docs/USING.md](./docs/USING.md).
 
 ```bash
 coco token create --name codex-local --scope openai
-coco tool install codex codex-local
+coco activate codex-local --write --tool codex
 codex
 ```
-
-`coco env <name> --codex` remains a quiet compatibility path. Prefer `coco tool install codex <name>` in new scripts.
 
 ### Generic SDKs and curl
 
 ```bash
 coco token create --name sdk-local --scope openai
-eval "$(coco env sdk-local)"
+eval "$(coco activate sdk-local --tool shell)"
 
 curl "$OPENAI_BASE_URL/v1/models" \
   -H "Authorization: Bearer $OPENAI_API_KEY"
@@ -196,28 +194,29 @@ gateway_url = "https://gw.example.com"
 [tokens.laptop]
 token = "ccgw_..."
 scope = ["github", "openai", "anthropic"]
+all_routes = false
 ```
 
-The local `scope` list tells the CLI which environment variables and tool adapters to render. It should match the scopes granted by the gateway. An empty list means unrestricted.
+The local `scope` list tells the CLI which environment variables and tool adapters to render. It should match the scopes granted by the gateway. Use `all_routes = true` only for unrestricted tokens.
 
 Then activate the tool you need:
 
 ```bash
-eval "$(coco tool env gh laptop)"
-coco tool install codex laptop
-eval "$(coco env laptop)"
+eval "$(coco activate laptop --tool gh)"
+coco activate laptop --write --tool codex
+eval "$(coco activate laptop --tool shell)"
 ```
 
 ## Routes
 
-Built-in routes are defined in [profiles/routes.json](./profiles/routes.json) and embedded into the gateway binary at build time.
+Built-in routes and tool adapters are defined together in [profiles/coco.yaml](./profiles/coco.yaml) and embedded into the binaries at build time.
 
-Token scopes use the top-level route key. Empty scope is unrestricted and allows all current and future routes. GitHub also owns an `/api/v3/...` compatibility alias for `gh`; it scopes as `github` and strips `/v3` before forwarding. Git smart-HTTP paths also scope as `github` and proxy to `github.com`.
+Token scopes use the top-level route key. Unrestricted tokens are explicit: create them with `coco token create --name laptop --all-routes`, which stores `all_routes = true` in the local CLI config. GitHub also owns an `/api/v3/...` compatibility alias for `gh`; it scopes as `github` and strips `/v3` before forwarding. Git smart-HTTP paths also scope as `github` and proxy to `github.com`.
 
 | Path prefix | Scope | Upstream | Gateway credential env | Injection |
 |---|---|---|---|---|
 | `/openai/...` | `openai` | `https://api.openai.com` | `OPENAI_API_KEY` | `Authorization: Bearer ...` |
-| `/anthropic/...` | `anthropic` | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` | OAuth tokens as `Authorization: Bearer ...`, API keys as `x-api-key` |
+| `/anthropic/...` | `anthropic` | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` | OAuth tokens as `Authorization: Bearer ...` plus `anthropic-beta: oauth-2025-04-20`; API keys as `x-api-key`; rejects `ccgw_...` phantom values upstream |
 | `/github/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` | `Authorization: Bearer ...` |
 | `/api/v3/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` | `gh` compatibility route; strips route-relative `/v3` |
 | `/<owner>/<repo>.git/{info/refs,git-upload-pack,git-receive-pack}` | `github` | `https://github.com` | `GITHUB_TOKEN` | Git smart-HTTP; accepts HTTP Basic auth |
@@ -257,7 +256,7 @@ Supported fields:
 | Field | Purpose |
 |---|---|
 | `upstream` | Base upstream URL |
-| `credential_sources` | Ordered env-backed credentials with `env`, `inject_header`, optional `format`, and optional `prefix` |
+| `credential_sources` | Ordered env-backed credentials with `env`, `inject_header`, optional `format`, optional `prefix`, optional `reject_prefixes`, and optional `extra_headers` |
 | `aliases` | Optional compatibility prefixes owned by this route, such as GitHub's `api` alias |
 | `strip_prefix` | Alias path prefix to remove before forwarding |
 | `inject_mode` | `header` or `url_path`; defaults to `header` |

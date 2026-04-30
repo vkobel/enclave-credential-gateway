@@ -1,0 +1,222 @@
+routes:
+  openai:
+    upstream: https://api.openai.com
+    credential_sources:
+      - env: OPENAI_API_KEY
+        inject_header: Authorization
+        format: "Bearer {}"
+
+  anthropic:
+    upstream: https://api.anthropic.com
+    credential_sources:
+      - env: ANTHROPIC_API_KEY
+        inject_header: Authorization
+        format: "Bearer {}"
+        prefix: sk-ant-oat
+        reject_prefixes: [ccgw_]
+        extra_headers:
+          anthropic-beta: oauth-2025-04-20
+      - env: ANTHROPIC_API_KEY
+        inject_header: x-api-key
+        format: "{}"
+        reject_prefixes: [ccgw_, sk-ant-oat]
+
+  github:
+    upstream: https://api.github.com
+    aliases:
+      - prefix: api
+        strip_prefix: /v3
+    git_protocol:
+      upstream: https://github.com
+      credential_sources:
+        - env: GITHUB_TOKEN
+          inject_header: Authorization
+          basic_user: x-access-token
+    credential_sources:
+      - env: GITHUB_TOKEN
+        inject_header: Authorization
+        format: "Bearer {}"
+
+  httpbin:
+    upstream: https://httpbin.org
+    credential_sources:
+      - env: HTTPBIN_TOKEN
+        inject_header: Authorization
+        format: "Bearer {}"
+
+  ollama:
+    upstream: https://127.0.0.1:11434
+    credential_sources:
+      - env: OLLAMA_API_KEY
+        inject_header: Authorization
+        format: "Bearer {}"
+
+  telegram:
+    upstream: https://api.telegram.org
+    inject_mode: url_path
+    url_path_prefix: /bot
+    credential_sources:
+      - env: TELEGRAM_BOT_TOKEN
+        inject_header: X-Unused
+        format: "{}"
+
+  groq:
+    upstream: https://api.groq.com
+    credential_sources:
+      - env: GROQ_API_KEY
+        inject_header: Authorization
+        format: "Bearer {}"
+
+  together:
+    upstream: https://api.together.xyz
+    credential_sources:
+      - env: TOGETHER_API_KEY
+        inject_header: Authorization
+        format: "Bearer {}"
+
+  elevenlabs:
+    upstream: https://api.elevenlabs.io
+    credential_sources:
+      - env: ELEVENLABS_API_KEY
+        inject_header: xi-api-key
+        format: "{}"
+
+tools:
+  shell:
+    description: Generic shell environment for all in-scope routes
+    routes: [anthropic, openai, github, ollama, httpbin]
+    env:
+      - requires_route: anthropic
+        key: ANTHROPIC_BASE_URL
+        value: "{{route_url:anthropic}}"
+      - requires_route: anthropic
+        key: ANTHROPIC_API_KEY
+        value: "{{token}}"
+      - requires_route: openai
+        key: OPENAI_BASE_URL
+        value: "{{route_url:openai}}"
+      - requires_route: openai
+        key: OPENAI_API_KEY
+        value: "{{token}}"
+      - requires_route: github
+        key: GH_HOST
+        value: "{{gateway_host}}"
+      - requires_route: github
+        key: GH_ENTERPRISE_TOKEN
+        value: "{{token}}"
+      - requires_route: github
+        key: GH_TOKEN
+        value: "{{token}}"
+      - requires_route: ollama
+        key: OLLAMA_HOST
+        value: "{{route_url:ollama}}"
+      - requires_route: httpbin
+        key: HTTPBIN_TOKEN
+        value: "{{token}}"
+
+  gh:
+    description: GitHub CLI plus Git smart-HTTP through the gateway
+    routes: [github]
+    git_credential_helper: true
+    env:
+      - requires_route: github
+        key: GH_HOST
+        value: "{{gateway_host}}"
+      - requires_route: github
+        key: GH_ENTERPRISE_TOKEN
+        value: "{{token}}"
+      - requires_route: github
+        key: GH_TOKEN
+        value: "{{token}}"
+
+  codex:
+    description: OpenAI Codex CLI
+    routes: [openai]
+    default_render_file: config
+    files:
+      - id: config
+        requires_route: openai
+        install_path: ~/.codex/config.toml
+        content: |
+          [model]
+          provider = "openai"
+          name = "o4-mini"
+          openai_base_url = "{{route_url:openai}}"
+
+          [auth]
+          api_key = "{{token}}"
+
+  opencode:
+    description: OpenCode config and environment
+    routes: [openai, anthropic, groq, together, elevenlabs]
+    default_render_file: config
+    files:
+      - id: config
+        managed_path: opencode.json
+        content: |
+          {
+            "$schema": "https://opencode.ai/config.json",
+            "provider": {
+              "openai": {
+                "options": {
+                  "baseURL": "{{route_url:openai}}",
+                  "apiKey": "{env:OPENAI_API_KEY}"
+                }
+              },
+              "anthropic": {
+                "options": {
+                  "baseURL": "{{route_url:anthropic}}",
+                  "apiKey": "{env:ANTHROPIC_API_KEY}"
+                }
+              },
+              "groq": {
+                "options": {
+                  "baseURL": "{{route_url:groq}}",
+                  "apiKey": "{env:GROQ_API_KEY}"
+                }
+              },
+              "together": {
+                "options": {
+                  "baseURL": "{{route_url:together}}",
+                  "apiKey": "{env:TOGETHER_API_KEY}"
+                }
+              },
+              "elevenlabs": {
+                "options": {
+                  "baseURL": "{{route_url:elevenlabs}}",
+                  "apiKey": "{env:ELEVENLABS_API_KEY}"
+                }
+              }
+            }
+          }
+    env:
+      - key: OPENCODE_CONFIG
+        value: "{{managed_file:config}}"
+      - requires_route: openai
+        key: OPENAI_API_KEY
+        value: "{{token}}"
+      - requires_route: anthropic
+        key: ANTHROPIC_API_KEY
+        value: "{{token}}"
+      - requires_route: groq
+        key: GROQ_API_KEY
+        value: "{{token}}"
+      - requires_route: together
+        key: TOGETHER_API_KEY
+        value: "{{token}}"
+      - requires_route: elevenlabs
+        key: ELEVENLABS_API_KEY
+        value: "{{token}}"
+
+  claude-code:
+    description: Anthropic Claude Code environment
+    experimental: true
+    routes: [anthropic]
+    default_render_file: env
+    files:
+      - id: env
+        requires_route: anthropic
+        content: |
+          # Experimental: Claude Code support is routed through shell environment variables.
+          export ANTHROPIC_API_KEY="{{token}}"
+          export ANTHROPIC_BASE_URL="{{route_url:anthropic}}"

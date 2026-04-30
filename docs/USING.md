@@ -23,7 +23,7 @@ admin_token = "..."   # only needed for token management commands
 
 **3. Create or add a token:**
 
-Scope values are route prefixes from your profile. Omit `--scope` to create an unrestricted token that allows all current and future routes.
+Scope values are route prefixes from your profile. Use `--all-routes` to create an unrestricted token that allows all current and future routes.
 
 ```bash
 # Via coco CLI (requires admin_token in config)
@@ -44,16 +44,17 @@ curl -s -X POST https://gw.example.com/admin/tokens \
 [tokens.laptop]
 token = "ccgw_..."
 scope = ["github", "httpbin", "anthropic", "openai", "ollama"]
+all_routes = false
 ```
 
-> Built-in route reference: `github`, `anthropic`, `openai`, `httpbin`, `ollama`, `telegram`, `groq`, `together`, `elevenlabs`. The built-in routes live in the embedded `profiles/routes.json` manifest. GitHub owns an `api` compatibility alias for `gh`; `/api/v3/...` scopes as `github`.
+> Built-in route reference: `github`, `anthropic`, `openai`, `httpbin`, `ollama`, `telegram`, `groq`, `together`, `elevenlabs`. Built-in routes and tool adapters live together in the embedded `profiles/coco.yaml` manifest. GitHub owns an `api` compatibility alias for `gh`; `/api/v3/...` scopes as `github`.
 
 ---
 
 ## One-command activation
 
 ```bash
-eval $(coco env laptop)
+eval "$(coco activate laptop --tool shell)"
 ```
 
 This sets the generic shell env vars in one shot.
@@ -61,9 +62,9 @@ This sets the generic shell env vars in one shot.
 For file-backed tools, use the dedicated tool adapters:
 
 ```bash
-coco tool install codex laptop
-eval $(coco tool env gh laptop)
-eval $(coco tool env opencode laptop)
+coco activate laptop --write --tool codex
+eval "$(coco activate laptop --tool gh)"
+eval "$(coco activate laptop --tool opencode)"
 ```
 
 ---
@@ -73,13 +74,13 @@ eval $(coco tool env opencode laptop)
 ### Render an experimental shell fragment
 
 ```bash
-coco tool render claude-code laptop
+coco activate laptop --render claude-code:env
 ```
 
 ### Generic shell env
 
 ```bash
-eval $(coco env laptop)
+eval "$(coco activate laptop --tool shell)"
 claude
 ```
 
@@ -91,11 +92,17 @@ export ANTHROPIC_API_KEY=ccgw_...    # phantom token — gateway swaps in the re
 claude
 ```
 
+The gateway process must have the real Anthropic credential in `ANTHROPIC_API_KEY`.
+The Claude Code client shell also uses `ANTHROPIC_API_KEY`, but there it must be
+the `ccgw_...` phantom token. Keep those environments separate: do not start or
+restart the gateway from a shell where `ANTHROPIC_API_KEY` has already been
+changed to the client phantom token.
+
 ### What happens
 
-Claude Code sends `x-api-key: <phantom>` (or `Authorization: Bearer <phantom>` for OAuth sessions). The gateway validates the phantom, strips it, and injects the real `ANTHROPIC_API_KEY` in the correct header before forwarding to `api.anthropic.com`.
+Claude Code sends `x-api-key: <phantom>` (or `Authorization: Bearer <phantom>` for OAuth sessions). The gateway validates the phantom, strips it, and injects the real upstream Anthropic credential in the correct header before forwarding to `api.anthropic.com`.
 
-For Anthropic OAuth tokens (`sk-ant-oat...`) the gateway injects `Authorization: Bearer <token>`. For regular API keys it injects `x-api-key: <key>`. The detection is automatic based on the `sk-ant-oat` prefix.
+For Anthropic OAuth tokens (`sk-ant-oat...`) the gateway injects `Authorization: Bearer <token>` and adds `anthropic-beta: oauth-2025-04-20`. For regular API keys it injects `x-api-key: <key>`. The detection is automatic based on the real upstream credential prefix, and `ccgw_...` phantom tokens are rejected as upstream credentials.
 
 ---
 
@@ -104,7 +111,7 @@ For Anthropic OAuth tokens (`sk-ant-oat...`) the gateway injects `Authorization:
 ### With coco (recommended)
 
 ```bash
-coco tool install codex laptop
+coco activate laptop --write --tool codex
 codex
 ```
 
@@ -116,7 +123,7 @@ export OPENAI_API_KEY=ccgw_...
 codex
 ```
 
-Codex CLI requires its own config file (`~/.codex/config.toml`) in addition to env vars. `coco tool install codex <token>` writes it directly. `coco env --codex` is still accepted as a quiet compatibility alias: it writes the Codex config only when the token can access the `openai` route, and otherwise leaves the config untouched.
+Codex CLI requires its own config file (`~/.codex/config.toml`) in addition to env vars. `coco activate <token> --write --tool codex` writes it directly when the token can access the `openai` route.
 
 ### Python SDK
 
@@ -140,7 +147,7 @@ response = client.chat.completions.create(
 ### With coco (recommended)
 
 ```bash
-eval $(coco tool env gh laptop)
+eval "$(coco activate laptop --tool gh)"
 gh repo list
 ```
 
@@ -157,9 +164,9 @@ gh repo list
 
 `gh repo clone` shells out to `git`, which authenticates the smart-HTTP transport with HTTP Basic auth. The gateway recognises requests of the form `/<owner>/<repo>.git/{info/refs,git-upload-pack,git-receive-pack}` and proxies them to `github.com` (the git host, not the API host). Tokens scoped to `github` cover both endpoints — no extra scope is needed.
 
-`coco tool env gh` also installs a session-scoped Git credential helper through Git's environment config. In the shell where you ran the `eval`, plain `git fetch`, `git pull`, and `git push` against gateway remotes authenticate automatically without embedding the token in `.git/config` or the remote URL. Re-running the `eval` is idempotent for the gateway helper; it replaces its existing entries instead of growing duplicate Git config entries.
+`coco activate --tool gh` also exports `GIT_CONFIG_GLOBAL` to a generated Git config under `~/.config/coco/generated/gh/<token>/gitconfig`. That file includes your normal `~/.gitconfig`, resets inherited credential helpers for the gateway URL, and adds the `coco git-credential` helper. In the activated shell, plain `git fetch`, `git pull`, and `git push` against gateway remotes authenticate automatically without embedding the token in `.git/config` or the remote URL.
 
-> **Note:** `GH_HOST` is a hostname, not a full URL. `gh` treats any `GH_HOST` other than `github.com` as a GitHub Enterprise host and reads `GH_ENTERPRISE_TOKEN` (not `GH_TOKEN`). `coco env` exports both so `gh` works for the gateway host and `GH_TOKEN` stays available for curl/manual examples.
+> **Note:** `GH_HOST` is a hostname, not a full URL. `gh` treats any `GH_HOST` other than `github.com` as a GitHub Enterprise host and reads `GH_ENTERPRISE_TOKEN` (not `GH_TOKEN`). `coco activate --tool gh` exports both so `gh` works for the gateway host and `GH_TOKEN` stays available for curl/manual examples.
 
 ---
 
@@ -168,7 +175,7 @@ gh repo list
 ### With coco (recommended)
 
 ```bash
-eval $(coco env laptop)
+eval "$(coco activate laptop --tool shell)"
 ollama run llama3.2
 ```
 
@@ -188,11 +195,11 @@ Requires `OLLAMA_HOST` to be set to the gateway's `/ollama` prefix. The `ollama.
 ### With coco (recommended)
 
 ```bash
-eval $(coco tool env opencode laptop)
+eval "$(coco activate laptop --tool opencode)"
 opencode
 ```
 
-`coco tool env opencode <token>` materializes an OpenCode config under `~/.config/coco/generated/` and exports `OPENCODE_CONFIG` plus the in-scope API key env vars needed by that generated config.
+`coco activate <token> --tool opencode` materializes an OpenCode config under `~/.config/coco/generated/` and exports `OPENCODE_CONFIG` plus the in-scope API key env vars needed by that generated config.
 
 ---
 
@@ -263,9 +270,9 @@ Revocation takes effect immediately. In-flight requests complete; all subsequent
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `407 Proxy Authentication Required` | Wrong or missing phantom token | Check `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` match your token value |
-| `403 Forbidden` | Token doesn't have this route in its scope | Recreate token with correct `--scope`, or omit scope for all routes |
-| `404 Not Found` | Unknown route prefix | Check the prefix matches a built-in route key in `profiles/routes.json` |
+| `403 Forbidden` | Token doesn't have this route in its scope | Recreate token with correct `--scope`, or use `--all-routes` for all routes |
+| `404 Not Found` | Unknown route prefix | Check the prefix matches a built-in route key in `profiles/coco.yaml` |
 | `503 Service Unavailable` | Real credential env var missing on the gateway | Set the credential env var and restart |
-| `coco env` fails | Token not in config file | Add `[tokens.<name>]` with `token = "ccgw_..."` to `~/.config/coco/config.toml` |
+| `coco activate` fails | Token not in config file | Add `[tokens.<name>]` with `token = "ccgw_..."` to `~/.config/coco/config.toml` |
 | `GH_HOST` is wrong | Set to full URL instead of hostname | `GH_HOST` must be just the hostname (`gw.example.com`), not a URL |
-| `gh` returns 407 despite `GH_TOKEN` being set | `gh` treats custom `GH_HOST` as Enterprise and ignores `GH_TOKEN` | Export `GH_ENTERPRISE_TOKEN` (or run `eval $(coco env <name>)` which sets both) |
+| `gh` returns 407 despite `GH_TOKEN` being set | `gh` treats custom `GH_HOST` as Enterprise and ignores `GH_TOKEN` | Export `GH_ENTERPRISE_TOKEN` (or run `eval "$(coco activate <name> --tool gh)"` which sets both) |

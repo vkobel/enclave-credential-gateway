@@ -147,7 +147,7 @@ Goal: a remotely deployable gateway that any agent or tool can connect to, with 
   - `inject_mode: "header" | "url_path"` — where to inject the credential (default: `"header"`)
     - `url_path`: inserts the credential into the upstream path (needed for Telegram: `/bot{credential}/...`)
   - `url_path_prefix: Option<String>` — path prefix placed before the credential when `inject_mode = "url_path"`
-- [x] 1c.5 — Ship the following routes in the single embedded `profiles/routes.json` manifest:
+- [x] 1c.5 — Ship the following routes in the single embedded `profiles/coco.yaml` manifest:
 
   | Route | Upstream | inject_mode | Notes |
   |---|---|---|---|
@@ -191,7 +191,7 @@ A single Rust binary (`crates/coco-cli`) with minimal subcommands. Goal: one com
   claude-code  = "ccgw_3a9f..."
   ci-runner    = "ccgw_ab12..."
   ```
-- [x] 1c.16 — `coco env <token-name>` — prints `export` statements for every tool that the gateway supports, using the named token as the phantom. Output is eval'd in the shell: `eval $(coco env claude-code)`. Emits:
+- [x] 1c.16 — `coco activate <token-name>` — prints `export` statements for every tool that the gateway supports, using the named token as the phantom. Output is eval'd in the shell: `eval "$(coco activate laptop)"`. Emits:
   ```bash
   export ANTHROPIC_BASE_URL=https://gw.example.com/anthropic
   export ANTHROPIC_API_KEY=ccgw_3a9f...
@@ -201,11 +201,11 @@ A single Rust binary (`crates/coco-cli`) with minimal subcommands. Goal: one com
   export GH_TOKEN=ccgw_3a9f...
   export OLLAMA_HOST=https://gw.example.com/ollama
   ```
-- [x] 1c.17 — `coco env <token-name> --codex` — additionally writes `~/.codex/config.toml` with `openai_base_url` set (Codex CLI does not read `OPENAI_BASE_URL` from env; requires its own config file).
+- [x] 1c.17 — `coco activate <token-name> --write --tool codex` — writes `~/.codex/config.toml` with `openai_base_url` set (Codex CLI does not read `OPENAI_BASE_URL` from env; requires its own config file).
 - [x] 1c.18 — `coco token create --name <str> [--scope <csv>]` — calls `POST /admin/tokens`, prints the token value once.
 - [x] 1c.19 — `coco token ls` — calls `GET /admin/tokens`, pretty-prints table.
 - [x] 1c.20 — `coco token revoke <name|id>` — calls `DELETE /admin/tokens/:id`.
-- [x] 1c.21 — Write `docs/USING.md`: copy-paste setup for Claude Code, Codex, gh CLI, and Ollama on a remote gateway. Shows both `eval $(coco env ...)` flow and manual env var approach.
+- [x] 1c.21 — Write `docs/USING.md`: copy-paste setup for Claude Code, Codex, gh CLI, and Ollama on a remote gateway. Shows both `eval "$(coco activate ...)"` flow and manual env var approach.
 
 ---
 
@@ -220,7 +220,8 @@ coco token create --name laptop --scope anthropic,openai,github,ollama
 # → ccgw_3a9f…  (save to ~/.config/coco/config.toml)
 
 # Activate in your shell (Claude Code + Codex + gh + Ollama all configured):
-eval $(coco env laptop --codex)
+eval "$(coco activate laptop --tool shell)"
+coco activate laptop --write --tool codex
 
 # Everything works:
 claude                    # Claude Code → gateway → Anthropic
@@ -326,7 +327,7 @@ Replaces the single `COCO_PHANTOM_TOKEN` env var with a named, per-client token 
 
 ## Post-v1 ideas
 
-- **Host-based routing**: each service gets its own subdomain (`github.localhost`, `openai.localhost`, …). Caddy routes by `Host` header and injects `X-Coco-Route: <service>`; the gateway checks that header before falling back to path prefix. Eliminates the `/api` route conflict and works naturally with CLI tools (`GH_HOST=github.localhost`) since they cannot include a path in the host setting. Path-prefix routing stays as a fallback for SDK clients. `coco env` would emit per-service hostnames instead of a single gateway URL.
+- **Host-based routing**: each service gets its own subdomain (`github.localhost`, `openai.localhost`, …). Caddy routes by `Host` header and injects `X-Coco-Route: <service>`; the gateway checks that header before falling back to path prefix. Eliminates the `/api` route conflict and works naturally with CLI tools (`GH_HOST=github.localhost`) since they cannot include a path in the host setting. Path-prefix routing stays as a fallback for SDK clients. `coco activate` would emit per-service hostnames instead of a single gateway URL.
 - **`HTTPS_PROXY` / CONNECT mode**: inject credentials via SSL interception. Unlocks zero-config agent integration for tools without a configurable base URL. Requires CA cert distribution.
 - **Local `coco` proxy mode**: a local process that sets env vars and proxies through the remote gateway, abstracting away per-tool configuration.
 - **Derived credential injection**: derive a short-lived scoped token inside the TEE instead of injecting the raw key.

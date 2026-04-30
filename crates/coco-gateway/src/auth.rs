@@ -2,6 +2,7 @@
 
 use crate::profile::CredentialSource;
 use crate::registry::TokenRecord;
+use crate::registry::TokenRegistry;
 use crate::state::AppState;
 use crate::validate_bearer_or_raw;
 
@@ -41,40 +42,90 @@ fn parse_auth_scheme(value: &str) -> Option<(&'static str, &str)> {
     None
 }
 
-pub fn extract_candidate_tokens(req: &Request<Body>) -> Vec<String> {
-    let mut candidates: Vec<String> = Vec::new();
-    let push = |c: String, list: &mut Vec<String>| {
-        if !c.is_empty() && !list.contains(&c) {
-            list.push(c);
-        }
-    };
-    for value in req.headers().values() {
-        let Ok(s) = value.to_str() else { continue };
-        let Some((scheme, rest)) = parse_auth_scheme(s) else {
-            continue;
-        };
+fn push_unique(candidate: String, candidates: &mut Vec<String>) {
+    if !candidate.is_empty() && !candidates.contains(&candidate) {
+        candidates.push(candidate);
+    }
+}
+
+fn header_candidate_tokens(value: &str, include_raw: bool) -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Some((scheme, rest)) = parse_auth_scheme(value) {
         match scheme {
-            "bearer" | "token" => push(rest.to_string(), &mut candidates),
+            "bearer" | "token" => push_unique(rest.to_string(), &mut candidates),
             "basic" => {
                 let Ok(decoded) = BASE64_STANDARD.decode(rest) else {
-                    continue;
+                    return candidates;
                 };
                 let Ok(text) = std::str::from_utf8(&decoded) else {
-                    continue;
+                    return candidates;
                 };
                 // git/gh credential helpers vary on which slot holds the token
                 // (`x-access-token:<tok>`, `<tok>:x-oauth-basic`, `oauth2:<tok>`,
-                // …). Try both halves; non-token values just miss the registry.
+                // ...). Try both halves; non-token values just miss the registry.
                 if let Some((u, p)) = text.split_once(':') {
-                    push(u.to_string(), &mut candidates);
-                    push(p.to_string(), &mut candidates);
+                    push_unique(u.to_string(), &mut candidates);
+                    push_unique(p.to_string(), &mut candidates);
                 } else {
-                    push(text.to_string(), &mut candidates);
+                    push_unique(text.to_string(), &mut candidates);
                 }
             }
             _ => {}
         }
+    } else if include_raw {
+        push_unique(value.trim().to_string(), &mut candidates);
     }
+    candidates
+}
+
+pub fn extract_candidate_tokens(req: &Request<Body>) -> Vec<String> {
+    let mut candidates: Vec<String> = Vec::new();
+    for value in req.headers().values() {
+        let Ok(s) = value.to_str() else { continue };
+        for candidate in header_candidate_tokens(s, false) {
+            push_unique(candidate, &mut candidates);
+        }
+    }
+    candidates
+}
+
+async fn find_registry_auth(
+    registry: &TokenRegistry,
+    candidates: Vec<(String, String, Option<usize>)>,
+) -> Option<PhantomAuth> {
+    for (candidate, header, preferred_source) in candidates {
+        if let Some(record) = registry.validate(&candidate).await {
+            return Some(PhantomAuth {
+                header,
+                preferred_source,
+                token_record: Some(record),
+            });
+        }
+    }
+
+    None
+}
+
+fn registry_auth_candidates(
+    req: &Request<Body>,
+    sources: &[CredentialSource],
+) -> Vec<(String, String, Option<usize>)> {
+    let mut candidates = Vec::new();
+    for src in sources {
+        let header_lower = src.inject_header.to_lowercase();
+        let Some(v) = req.headers().get(header_lower.as_str()) else {
+            continue;
+        };
+        let Ok(s) = v.to_str() else { continue };
+        for candidate in header_candidate_tokens(s, true) {
+            candidates.push((candidate, header_lower.clone(), None));
+        }
+    }
+
+    for candidate in extract_candidate_tokens(req) {
+        candidates.push((candidate, "authorization".to_string(), None));
+    }
+
     candidates
 }
 
@@ -128,26 +179,23 @@ pub async fn auth_middleware(
 
     // 1. Try registry tokens first
     if let Some(registry) = &state.token_registry {
-        let candidates = extract_candidate_tokens(&req);
-        for candidate in candidates {
-            if let Some(record) = registry.validate(&candidate).await {
-                if !record.allows_route(canonical) {
-                    warn!(
-                        "{} {} — 403 token '{}' not scoped for route '{}'",
-                        method, path, record.name, canonical
-                    );
-                    return (StatusCode::FORBIDDEN, "403 Forbidden — token scope denied")
-                        .into_response();
-                }
-                info!("{} {} — auth ok (token: '{}')", method, path, record.name);
-                let auth = PhantomAuth {
-                    header: "authorization".to_string(),
-                    preferred_source: None,
-                    token_record: Some(record),
-                };
-                req.extensions_mut().insert(auth);
-                return next.run(req).await;
+        let candidates = registry_auth_candidates(&req, sources);
+        if let Some(auth) = find_registry_auth(registry, candidates).await {
+            let record = auth
+                .token_record
+                .clone()
+                .expect("registry auth includes token record");
+            if !record.allows_route(canonical) {
+                warn!(
+                    "{} {} — 403 token '{}' not scoped for route '{}'",
+                    method, path, record.name, canonical
+                );
+                return (StatusCode::FORBIDDEN, "403 Forbidden — token scope denied")
+                    .into_response();
             }
+            info!("{} {} — auth ok (token: '{}')", method, path, record.name);
+            req.extensions_mut().insert(auth);
+            return next.run(req).await;
         }
     }
 
@@ -184,4 +232,72 @@ pub async fn auth_middleware(
         "407 Proxy Authentication Required",
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_registry_auth;
+    use crate::profile::CredentialSource;
+    use crate::registry::TokenRegistry;
+    use axum::{body::Body, http::Request};
+    use tempfile::TempDir;
+
+    fn anthropic_api_key_source() -> CredentialSource {
+        CredentialSource {
+            env: "ANTHROPIC_API_KEY".to_string(),
+            inject_header: "x-api-key".to_string(),
+            format: "{}".to_string(),
+            prefix: None,
+            reject_prefixes: vec![],
+            extra_headers: std::collections::BTreeMap::new(),
+            basic_user: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_auth_accepts_raw_route_header_token() {
+        let dir = TempDir::new().unwrap();
+        let registry = TokenRegistry::load_or_create(dir.path().join("tokens.json"))
+            .await
+            .unwrap();
+        let (_record, token) = registry
+            .create_token("claude".to_string(), vec!["anthropic".to_string()], false)
+            .await;
+        let req = Request::builder()
+            .uri("/anthropic/v1/messages")
+            .header("x-api-key", token)
+            .body(Body::empty())
+            .unwrap();
+
+        let candidates = super::registry_auth_candidates(&req, &[anthropic_api_key_source()]);
+        let auth = find_registry_auth(&registry, candidates).await.unwrap();
+
+        assert_eq!(auth.header, "x-api-key");
+        assert_eq!(auth.preferred_source, None);
+        assert_eq!(auth.token_record.unwrap().name, "claude");
+    }
+
+    #[tokio::test]
+    async fn registry_auth_prefers_valid_route_header_over_conflicting_authorization() {
+        let dir = TempDir::new().unwrap();
+        let registry = TokenRegistry::load_or_create(dir.path().join("tokens.json"))
+            .await
+            .unwrap();
+        let (_record, token) = registry
+            .create_token("claude".to_string(), vec!["anthropic".to_string()], false)
+            .await;
+        let req = Request::builder()
+            .uri("/anthropic/v1/messages")
+            .header("authorization", "Bearer claude-ai-session-token")
+            .header("x-api-key", token)
+            .body(Body::empty())
+            .unwrap();
+
+        let candidates = super::registry_auth_candidates(&req, &[anthropic_api_key_source()]);
+        let auth = find_registry_auth(&registry, candidates).await.unwrap();
+
+        assert_eq!(auth.header, "x-api-key");
+        assert_eq!(auth.preferred_source, None);
+        assert_eq!(auth.token_record.unwrap().name, "claude");
+    }
 }

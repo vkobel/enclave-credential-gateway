@@ -146,17 +146,18 @@ CREATED_TOKEN=""; CREATED_TOKEN_ID=""
 create_token() {
   local name="$1"
   local scope_json="$2"
+  local all_routes="${3:-false}"
   GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
     -X POST "http://localhost:${GATEWAY_PORT}/admin/tokens" \
     -H "Authorization: Bearer ${COCO_ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
-    -d "{\"name\":\"${name}\",\"scope\":${scope_json}}" 2>/dev/null)
+    -d "{\"name\":\"${name}\",\"scope\":${scope_json},\"all_routes\":${all_routes}}" 2>/dev/null)
   GW_BODY=$(cat "$GW_TMPFILE")
 
   if [[ "$GW_STATUS" == "200" ]]; then
     CREATED_TOKEN=$(echo "$GW_BODY" | jq -r '.token')
     CREATED_TOKEN_ID=$(echo "$GW_BODY" | jq -r '.id')
-    pass "Created token '$name' with scope $scope_json"
+    pass "Created token '$name' with scope $scope_json all_routes=$all_routes"
   else
     fail "Create token '$name' — expected 200, got $GW_STATUS"
     echo "    Body: $(echo "$GW_BODY" | head -3)"
@@ -165,7 +166,7 @@ create_token() {
 
 section "Registry tokens"
 
-create_token "e2e-all" '[]'
+create_token "e2e-all" '[]' true
 ALL_TOKEN="$CREATED_TOKEN"
 create_token "e2e-httpbin" '["httpbin"]'
 HTTPBIN_SCOPED_TOKEN="$CREATED_TOKEN"
@@ -230,6 +231,25 @@ case "$status" in
   *)       pass "Basic auth (token in username slot) accepted (status $status)" ;;
 esac
 
+section "Auth: route credential headers"
+
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -H "x-api-key: ${ALL_TOKEN}" \
+  "http://localhost:${GATEWAY_PORT}/anthropic/v1/messages" 2>/dev/null)
+case "$status" in
+  407|401) fail "Anthropic x-api-key registry token → got $status, expected auth to pass" ;;
+  *)       pass "Anthropic x-api-key registry token accepted (status $status)" ;;
+esac
+
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Bearer claude-ai-session-token" \
+  -H "x-api-key: ${ALL_TOKEN}" \
+  "http://localhost:${GATEWAY_PORT}/anthropic/v1/messages" 2>/dev/null)
+case "$status" in
+  407|401) fail "Anthropic x-api-key with conflicting Authorization → got $status, expected auth to pass" ;;
+  *)       pass "Anthropic x-api-key wins over conflicting Authorization (status $status)" ;;
+esac
+
 section "Route: github (git smart-HTTP)"
 
 # Resolves via the GitSmartHttp matcher, not a path prefix. The token is
@@ -271,10 +291,12 @@ admin_token = "${COCO_ADMIN_TOKEN}"
 [tokens.laptop]
 token = "${ALL_TOKEN}"
 scope = []
+all_routes = true
 
 [tokens.github_only]
 token = "${GITHUB_SCOPED_TOKEN}"
 scope = ["github"]
+all_routes = false
 EOF
 
 CLI_STDOUT="$CLI_HOME/stdout.txt"
@@ -297,34 +319,34 @@ if [[ ! -x "$COCO_BIN" ]]; then
   fail "Built coco CLI binary not found at $COCO_BIN"
 fi
 
-if env "${CLI_ENV[@]}" "$COCO_BIN" env github_only --codex >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
-  pass "coco env --codex succeeds for non-OpenAI token"
+if env "${CLI_ENV[@]}" "$COCO_BIN" activate github_only >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
+  pass "coco activate succeeds for non-OpenAI token"
 else
-  fail "coco env --codex should not fail for non-OpenAI token"
+  fail "coco activate should not fail for non-OpenAI token"
 fi
 
 grep -q "export GH_HOST=localhost:${GATEWAY_PORT}" "$CLI_STDOUT" \
-  && pass "github-only env exports are printed" \
+  && pass "github-only activate exports are printed" \
   || fail "github-only env exports missing"
 
 [[ ! -s "$CLI_STDERR" ]] \
-  && pass "coco env --codex compatibility path is quiet" \
-  || fail "coco env --codex wrote unexpected stderr: $(head -1 "$CLI_STDERR")"
+  && pass "coco activate is quiet" \
+  || fail "coco activate wrote unexpected stderr: $(head -1 "$CLI_STDERR")"
 
 [[ ! -f "$CLI_HOME/.codex/config.toml" ]] \
-  && pass "non-OpenAI --codex does not write Codex config" \
-  || fail "non-OpenAI --codex wrote Codex config"
+  && pass "non-OpenAI activate does not write Codex config" \
+  || fail "non-OpenAI activate wrote Codex config"
 
-if env "${CLI_ENV[@]}" "$COCO_BIN" tool install codex github_only >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
-  fail "coco tool install codex should reject non-OpenAI token"
+if env "${CLI_ENV[@]}" "$COCO_BIN" activate github_only --write --tool codex >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
+  fail "coco activate --write --tool codex should reject non-OpenAI token"
 else
-  pass "coco tool install codex rejects non-OpenAI token"
+  pass "coco activate --write --tool codex rejects non-OpenAI token"
 fi
 
-if env "${CLI_ENV[@]}" "$COCO_BIN" env laptop --codex >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
-  pass "coco env --codex writes Codex config for all-route token"
+if env "${CLI_ENV[@]}" "$COCO_BIN" activate laptop --write --tool codex >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
+  pass "coco activate --write --tool codex writes Codex config for all-route token"
 else
-  fail "coco env --codex should write Codex config for all-route token"
+  fail "coco activate --write --tool codex should write Codex config for all-route token"
 fi
 
 grep -q "openai_base_url = \"http://localhost:${GATEWAY_PORT}/openai\"" "$CLI_HOME/.codex/config.toml" \
@@ -352,6 +374,8 @@ section "Route: anthropic"
 
 if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
   skip "ANTHROPIC_API_KEY not set — skipping Anthropic test"
+elif [[ "${ANTHROPIC_API_KEY}" == ccgw_* ]]; then
+  skip "ANTHROPIC_API_KEY contains a CoCo phantom token — set it to the real Anthropic key for live gateway tests"
 elif [[ "${COCO_TEST_ANTHROPIC_MODE:-apikey}" == "oauth" ]]; then
   info "COCO_TEST_ANTHROPIC_MODE=oauth — testing Claude Code OAuth path"
   GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
@@ -359,7 +383,6 @@ elif [[ "${COCO_TEST_ANTHROPIC_MODE:-apikey}" == "oauth" ]]; then
     -H "Authorization: Bearer ${ALL_TOKEN}" \
     -H "Content-Type: application/json" \
     -H "anthropic-version: 2023-06-01" \
-    -H "anthropic-beta: oauth-2025-04-20" \
     -d '{
       "model": "claude-haiku-4-5-20251001",
       "max_tokens": 8,
@@ -429,7 +452,7 @@ GH_E2E_WORKDIR=$(mktemp -d)
 
 export HOME="$CLI_HOME"
 export PATH="${COCO_BIN%/*}:$PATH"
-eval "$("$COCO_BIN" tool env gh github_only)"
+eval "$("$COCO_BIN" activate github_only --tool gh)"
 export GIT_TERMINAL_PROMPT=0
 
 # Resolve authenticated username
@@ -473,7 +496,7 @@ GW_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
   || fail "GitHub REST: view repo → expected 200, got $GW_STATUS"
 
 # Clone via git smart-HTTP. Remote URL has no embedded token; the Git
-# credential helper emitted by `coco tool env gh` supplies Basic auth.
+# credential helper emitted by `coco activate --tool gh` supplies Basic auth.
 git_remote="http://localhost:${GATEWAY_PORT}/${GH_E2E_REPO}.git"
 if git clone -q "$git_remote" "${GH_E2E_WORKDIR}/repo" 2>/dev/null; then
   pass "git clone via gateway (smart-HTTP, credential helper)"
