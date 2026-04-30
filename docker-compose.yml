@@ -10,8 +10,6 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - HTTPBIN_TOKEN=${HTTPBIN_TOKEN}
-      - OLLAMA_API_KEY=${OLLAMA_API_KEY}
     volumes:
       - coco-data:/data
     restart: unless-stopped
