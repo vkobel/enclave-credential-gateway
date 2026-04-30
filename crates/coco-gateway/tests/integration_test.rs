@@ -346,11 +346,11 @@ mod profile_tests {
                 );
             }
         }
-        // Sanity: at least one non-github route exists and loads cleanly.
+        // Sanity: supported routes exist and load cleanly.
         assert!(routes.iter().any(|(k, _)| k == "openai"));
         assert!(routes.iter().any(|(k, _)| k == "anthropic"));
-        let ollama = routes.iter().find(|(k, _)| k == "ollama").unwrap();
-        assert_eq!(ollama.1.upstream, "https://ollama.com");
+        let anthropic = routes.iter().find(|(k, _)| k == "anthropic").unwrap();
+        assert_eq!(anthropic.1.upstream, "https://api.anthropic.com");
     }
 
     #[test]
@@ -618,8 +618,8 @@ mod header_tests {
         let stripped = &path[prefix.len() + 1..];
         assert_eq!(stripped, "/v1/chat/completions");
 
-        let path2 = "/httpbin/";
-        let prefix2 = "httpbin";
+        let path2 = "/anthropic/";
+        let prefix2 = "anthropic";
         let stripped2 = &path2[prefix2.len() + 1..];
         let result = if stripped2.is_empty() { "/" } else { stripped2 };
         assert_eq!(result, "/");
@@ -782,13 +782,13 @@ mod registry_tests {
     async fn test_scope_enforcement() {
         let (registry, _dir) = create_registry().await;
         let (_record, scoped_token) = registry
-            .create_token("scoped".to_string(), vec!["httpbin".to_string()], false)
+            .create_token("scoped".to_string(), vec!["openai".to_string()], false)
             .await;
 
         let validated = registry.validate(&scoped_token).await.unwrap();
-        assert_eq!(validated.scope, vec!["httpbin"]);
+        assert_eq!(validated.scope, vec!["openai"]);
         assert!(!validated.is_all_routes());
-        assert!(validated.allows_route("httpbin"));
+        assert!(validated.allows_route("openai"));
         assert!(!validated.allows_route("anthropic"));
     }
 
@@ -799,7 +799,7 @@ mod registry_tests {
 
         let validated = registry.validate(&token).await.unwrap();
         assert!(validated.is_all_routes());
-        assert!(validated.allows_route("httpbin"));
+        assert!(validated.allows_route("openai"));
         assert!(validated.allows_route("future-route"));
     }
 
