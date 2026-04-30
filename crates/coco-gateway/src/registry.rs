@@ -8,6 +8,11 @@ use subtle::ConstantTimeEq;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TokenCreateError {
+    DuplicateName { name: String },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum TokenStatus {
@@ -67,7 +72,12 @@ impl TokenRegistry {
         name: String,
         scope: Vec<String>,
         all_routes: bool,
-    ) -> (TokenRecord, String) {
+    ) -> Result<(TokenRecord, String), TokenCreateError> {
+        let mut tokens = self.tokens.write().await;
+        if tokens.iter().any(|record| record.name == name) {
+            return Err(TokenCreateError::DuplicateName { name });
+        }
+
         let mut raw = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut raw);
         let token_value = format!("ccgw_{}", hex::encode(raw));
@@ -83,10 +93,11 @@ impl TokenRegistry {
             token_hash: hash,
         };
 
-        self.tokens.write().await.push(record.clone());
+        tokens.push(record.clone());
+        drop(tokens);
         self.persist().await;
 
-        (record, token_value)
+        Ok((record, token_value))
     }
 
     pub async fn validate(&self, token: &str) -> Option<TokenRecord> {

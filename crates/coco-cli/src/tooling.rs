@@ -4,7 +4,9 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Component, Path, PathBuf};
 
-const MANIFEST_YAML: &str = include_str!("../../../profiles/coco.yaml");
+mod embedded_profiles {
+    include!(concat!(env!("OUT_DIR"), "/embedded_profiles.rs"));
+}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Manifest {
@@ -108,6 +110,24 @@ pub fn activate(
     mode: ActivationMode,
 ) -> Result<Activation> {
     let manifest = load_manifest()?;
+    activate_with_manifest(
+        manifest,
+        config,
+        token_name,
+        tool_filter,
+        route_filter,
+        mode,
+    )
+}
+
+fn activate_with_manifest(
+    manifest: Manifest,
+    config: &Config,
+    token_name: &str,
+    tool_filter: Option<&[String]>,
+    route_filter: Option<&str>,
+    mode: ActivationMode,
+) -> Result<Activation> {
     if let Some(route_filter) = route_filter {
         if !manifest.routes.contains_key(route_filter) {
             bail!(
@@ -233,13 +253,37 @@ pub fn known_routes() -> Result<Vec<String>> {
 }
 
 pub fn load_manifest() -> Result<Manifest> {
-    Manifest::from_str(MANIFEST_YAML)
+    load_manifest_from_files(
+        embedded_profiles::ROUTE_FILES,
+        embedded_profiles::TOOL_FILES,
+    )
 }
 
-impl Manifest {
-    pub fn from_str(contents: &str) -> Result<Self> {
-        serde_yaml::from_str(contents).context("Failed to parse embedded CoCo manifest")
+fn load_manifest_from_files(
+    route_files: &[(&str, &str)],
+    tool_files: &[(&str, &str)],
+) -> Result<Manifest> {
+    let mut routes = BTreeMap::new();
+    for (name, contents) in route_files {
+        if routes.contains_key(*name) {
+            bail!("Duplicate route profile '{}'", name);
+        }
+        let value: serde_yaml::Value = serde_yaml::from_str(contents)
+            .with_context(|| format!("Failed to parse route profile '{}'", name))?;
+        routes.insert((*name).to_string(), value);
     }
+
+    let mut tools = BTreeMap::new();
+    for (name, contents) in tool_files {
+        if tools.contains_key(*name) {
+            bail!("Duplicate tool profile '{}'", name);
+        }
+        let adapter: ToolAdapter = serde_yaml::from_str(contents)
+            .with_context(|| format!("Failed to parse tool profile '{}'", name))?;
+        tools.insert((*name).to_string(), adapter);
+    }
+
+    Ok(Manifest { routes, tools })
 }
 
 fn materialize_managed_files(
@@ -383,8 +427,6 @@ fn shell_word(value: &str) -> String {
     }
 }
 
-
-
 fn validate_managed_path(path: &str) -> Result<PathBuf> {
     let managed_path = Path::new(path);
     if managed_path.is_absolute()
@@ -451,7 +493,10 @@ fn host_only(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{activate, validate_managed_path, ActivationMode, EnvExport};
+    use super::{
+        activate, activate_with_manifest, load_manifest, load_manifest_from_files,
+        validate_managed_path, ActivationMode, EnvExport,
+    };
     use crate::config::{Config, TokenEntry};
     use crate::test_support::with_temp_config_root;
     use std::collections::HashMap;
@@ -480,6 +525,79 @@ mod tests {
             admin_token: None,
             tokens,
         }
+    }
+
+    #[test]
+    fn embedded_manifest_loads_split_routes_and_tools() {
+        let manifest = load_manifest().unwrap();
+
+        for route in ["anthropic", "github", "openai"] {
+            assert!(manifest.routes.contains_key(route), "missing route {route}");
+        }
+        for tool in ["claude-code", "codex", "gh"] {
+            assert!(manifest.tools.contains_key(tool), "missing tool {tool}");
+        }
+    }
+
+    #[test]
+    fn tool_identity_comes_from_filename_key() {
+        let manifest = load_manifest_from_files(
+            &[("openai", "upstream: https://api.openai.com\n")],
+            &[(
+                "aider",
+                r#"
+routes: [openai]
+env:
+  - requires_route: openai
+    key: OPENAI_API_BASE
+    value: "{{route_url:openai}}/v1"
+"#,
+            )],
+        )
+        .unwrap();
+        let config = config_with_scope(&["openai"]);
+        let activation = activate_with_manifest(
+            manifest,
+            &config,
+            "laptop",
+            Some(&["aider".to_string()]),
+            None,
+            ActivationMode::Describe,
+        )
+        .unwrap();
+
+        assert!(activation.exports.contains(&EnvExport {
+            key: "OPENAI_API_BASE".to_string(),
+            value: "https://gw.example.com/openai/v1".to_string()
+        }));
+    }
+
+    #[test]
+    fn unknown_tool_and_route_errors_stay_clear() {
+        let config = config_with_scope(&["openai"]);
+        let tool_error = activate(
+            &config,
+            "laptop",
+            Some(&["missing-tool".to_string()]),
+            None,
+            ActivationMode::Describe,
+        )
+        .unwrap_err();
+        assert!(tool_error
+            .to_string()
+            .contains("Unknown tool adapter 'missing-tool'"));
+
+        let route_error = activate(
+            &config,
+            "laptop",
+            Some(&["codex".to_string()]),
+            Some("missing-route"),
+            ActivationMode::Describe,
+        )
+        .unwrap_err();
+        assert!(route_error
+            .to_string()
+            .contains("Unknown route 'missing-route'"));
     }
 
     #[test]

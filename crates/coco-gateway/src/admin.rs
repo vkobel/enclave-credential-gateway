@@ -2,6 +2,7 @@
 
 use crate::state::AppState;
 
+use crate::registry::TokenCreateError;
 use axum::{
     extract::{Path, State},
     http::{Request, StatusCode},
@@ -100,9 +101,19 @@ async fn create_token(
         return (StatusCode::BAD_REQUEST, message).into_response();
     }
 
-    let (record, token_value) = registry
+    let (record, token_value) = match registry
         .create_token(req.name, req.scope, req.all_routes)
-        .await;
+        .await
+    {
+        Ok(created) => created,
+        Err(TokenCreateError::DuplicateName { name }) => {
+            return (
+                StatusCode::CONFLICT,
+                format!("token name '{}' already exists", name),
+            )
+                .into_response()
+        }
+    };
     let warning = record
         .is_all_routes()
         .then(|| UNRESTRICTED_SCOPE_WARNING.to_string());

@@ -4,8 +4,11 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::warn;
 
-const EMBEDDED_PROFILE_PATH: &str = "profiles/coco.yaml";
-const EMBEDDED_PROFILE_YAML: &str = include_str!("../../../profiles/coco.yaml");
+const EMBEDDED_PROFILE_PATH: &str = "profiles/routes";
+
+mod embedded_profiles {
+    include!(concat!(env!("OUT_DIR"), "/embedded_profiles.rs"));
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CredentialSource {
@@ -177,7 +180,7 @@ pub fn load_profile() -> Vec<(String, RouteEntry)> {
 }
 
 pub fn load_embedded_routes() -> Vec<(String, RouteEntry)> {
-    try_load_routes_from_str(EMBEDDED_PROFILE_PATH, EMBEDDED_PROFILE_YAML)
+    try_load_routes_from_files(EMBEDDED_PROFILE_PATH, embedded_profiles::ROUTE_FILES)
         .expect("embedded profile manifest must be valid")
 }
 
@@ -188,8 +191,46 @@ pub fn try_load_routes_from_str(
     let profile: Profile = serde_yaml::from_str(contents)
         .map_err(|e| format!("Failed to parse profile at {}: {}", source, e))?;
 
+    expand_profile_routes(profile.routes)
+}
+
+pub fn try_load_routes_from_files(
+    source: &str,
+    files: &[(&str, &str)],
+) -> Result<Vec<(String, RouteEntry)>, String> {
+    if files.is_empty() {
+        return Err(format!("No route profiles found in {}", source));
+    }
+
+    let mut profile_routes = BTreeMap::new();
+    for (name, contents) in files {
+        let key = normalize_route_key(name);
+        if key.is_empty() {
+            return Err(format!("Route profile '{}' has an empty route key", name));
+        }
+        if profile_routes.contains_key(&key) {
+            return Err(format!(
+                "Profile route '{}' normalizes to duplicate key '{}'",
+                name, key
+            ));
+        }
+        let route: ProfileRoute = serde_yaml::from_str(contents).map_err(|e| {
+            format!(
+                "Failed to parse route profile at {}/{}.yaml: {}",
+                source, name, e
+            )
+        })?;
+        profile_routes.insert(key, route);
+    }
+
+    expand_profile_routes(profile_routes)
+}
+
+fn expand_profile_routes(
+    profile_routes: BTreeMap<String, ProfileRoute>,
+) -> Result<Vec<(String, RouteEntry)>, String> {
     let mut original_keys = BTreeSet::new();
-    for prefix in profile.routes.keys() {
+    for prefix in profile_routes.keys() {
         let key = normalize_route_key(prefix);
         if !original_keys.insert(key.clone()) {
             return Err(format!(
@@ -200,7 +241,7 @@ pub fn try_load_routes_from_str(
     }
 
     let mut routes = BTreeMap::new();
-    for (prefix, route) in profile.routes {
+    for (prefix, route) in profile_routes {
         let key = normalize_route_key(&prefix);
         let aliases = route.aliases.clone();
         let git_protocol = route.git_protocol.clone();

@@ -147,7 +147,7 @@ Goal: a remotely deployable gateway that any agent or tool can connect to, with 
   - `inject_mode: "header" | "url_path"` — where to inject the credential (default: `"header"`)
     - `url_path`: inserts the credential into the upstream path (needed for Telegram: `/bot{credential}/...`)
   - `url_path_prefix: Option<String>` — path prefix placed before the credential when `inject_mode = "url_path"`
-- [x] 1c.5 — Ship the following routes in the single embedded `profiles/coco.yaml` manifest:
+- [x] 1c.5 — Ship the following routes in the embedded profile files:
 
   | Route | Upstream | inject_mode | Notes |
   |---|---|---|---|

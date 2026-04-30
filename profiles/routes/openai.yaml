@@ -1,0 +1,5 @@
+upstream: https://api.openai.com
+credential_sources:
+  - env: OPENAI_API_KEY
+    inject_header: Authorization
+    format: "Bearer {}"

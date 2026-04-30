@@ -1,0 +1,20 @@
+description: OpenAI Codex CLI
+routes: [openai]
+env:
+  - key: CODEX_HOME
+    value: "{{generated_root}}/home"
+files:
+  - id: config
+    requires_route: openai
+    generated_path: "{{generated_root}}/home/config.toml"
+    content: |
+      model_provider = "openai"
+      openai_base_url = "{{route_url:openai}}/v1"
+  - id: auth
+    requires_route: openai
+    generated_path: "{{generated_root}}/home/auth.json"
+    content: |
+      {
+        "auth_mode": "apikey",
+        "OPENAI_API_KEY": "{{token}}"
+      }

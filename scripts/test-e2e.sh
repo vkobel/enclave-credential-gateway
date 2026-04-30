@@ -167,6 +167,18 @@ section "Registry tokens"
 
 create_token "e2e-all" '[]' true
 ALL_TOKEN="$CREATED_TOKEN"
+GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
+  -X POST "http://localhost:${GATEWAY_PORT}/admin/tokens" \
+  -H "Authorization: Bearer ${COCO_ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"e2e-all","scope":["openai"],"all_routes":false}' 2>/dev/null)
+GW_BODY=$(cat "$GW_TMPFILE")
+if [[ "$GW_STATUS" == "409" && "$GW_BODY" == *"already exists"* ]]; then
+  pass "Duplicate token name rejected"
+else
+  fail "Duplicate token name — expected 409, got $GW_STATUS"
+  echo "    Body: $(echo "$GW_BODY" | head -3)"
+fi
 create_token "e2e-openai" '["openai"]'
 OPENAI_SCOPED_TOKEN="$CREATED_TOKEN"
 create_token "e2e-github" '["github"]'

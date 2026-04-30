@@ -207,7 +207,7 @@ coco activate laptop --tool claude-code
 
 ## Routes
 
-Built-in routes and tool adapters are defined together in [profiles/coco.yaml](./profiles/coco.yaml) and embedded into the binaries at build time.
+Built-in routes and tool adapters are defined as one file per entry under [profiles/routes](./profiles/routes) and [profiles/tools](./profiles/tools), with contributor notes in [profiles/README.md](./profiles/README.md). They are embedded into the binaries at build time.
 
 Token scopes use the top-level route key. Unrestricted tokens are explicit: create them with `coco token create --name laptop --all-routes`, which stores `all_routes = true` in the local CLI config. GitHub also owns an `/api/v3/...` compatibility alias for `gh`; it scopes as `github` and strips `/v3` before forwarding. Git smart-HTTP paths also scope as `github` and proxy to `github.com`.
 
@@ -254,6 +254,10 @@ Route manifest syntax is route-first:
   }
 }
 ```
+
+In the split profile layout, the route key comes from the filename. For example,
+`profiles/routes/example.yaml` contains the body of the `<route-key>` object
+shown above and defines the `example` scope.
 
 Supported fields:
 

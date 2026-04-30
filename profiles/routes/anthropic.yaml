@@ -1,0 +1,13 @@
+upstream: https://api.anthropic.com
+credential_sources:
+  - env: ANTHROPIC_API_KEY
+    inject_header: Authorization
+    format: "Bearer {}"
+    prefix: sk-ant-oat
+    reject_prefixes: [ccgw_]
+    extra_headers:
+      anthropic-beta: oauth-2025-04-20
+  - env: ANTHROPIC_API_KEY
+    inject_header: x-api-key
+    format: "{}"
+    reject_prefixes: [ccgw_, sk-ant-oat]

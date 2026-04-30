@@ -173,7 +173,9 @@ mod extract_candidate_tokens_tests {
 
 /// Profile loading and schema tests
 mod profile_tests {
-    use coco_gateway::profile::{load_embedded_routes, try_load_routes_from_str};
+    use coco_gateway::profile::{
+        load_embedded_routes, try_load_routes_from_files, try_load_routes_from_str,
+    };
     use coco_gateway::{InjectMode, ProfileRoute, RouteEntry, RouteMatcher};
 
     #[test]
@@ -285,16 +287,55 @@ mod profile_tests {
     }
 
     #[test]
-    fn test_embedded_manifest_has_no_top_level_api_route() {
-        let manifest: serde_yaml::Value =
-            serde_yaml::from_str(include_str!("../../../profiles/coco.yaml")).unwrap();
-        let routes = manifest["routes"].as_mapping().unwrap();
-        assert!(routes.contains_key(serde_yaml::Value::String("github".to_string())));
-        assert!(!routes.contains_key(serde_yaml::Value::String("api".to_string())));
+    fn test_split_github_profile_has_no_top_level_api_route() {
+        let github: serde_yaml::Value =
+            serde_yaml::from_str(include_str!("../../../profiles/routes/github.yaml")).unwrap();
 
-        let aliases = routes["github"]["aliases"].as_sequence().unwrap();
+        assert!(github["upstream"].is_string());
+        assert!(github["api"].is_null());
+
+        let aliases = github["aliases"].as_sequence().unwrap();
         assert_eq!(aliases[0]["prefix"].as_str(), Some("api"));
         assert_eq!(aliases[0]["strip_prefix"].as_str(), Some("/v3"));
+    }
+
+    #[test]
+    fn test_embedded_split_routes_include_expected_expansions() {
+        let routes = load_embedded_routes();
+
+        assert!(routes.iter().any(|(k, _)| k == "openai"));
+        assert!(routes.iter().any(|(k, _)| k == "anthropic"));
+        assert!(routes.iter().any(|(k, _)| k == "github"));
+        assert!(routes
+            .iter()
+            .any(|(k, e)| k == "api" && e.canonical_route == "github"));
+        assert!(
+            routes
+                .iter()
+                .any(|(_, e)| e.matcher == RouteMatcher::GitSmartHttp
+                    && e.canonical_route == "github")
+        );
+    }
+
+    #[test]
+    fn test_split_route_identity_comes_from_filename_key() {
+        let routes = try_load_routes_from_files(
+            "test",
+            &[(
+                "example",
+                r#"
+upstream: https://api.example.com
+credential_sources:
+  - env: EXAMPLE_TOKEN
+    inject_header: Authorization
+"#,
+            )],
+        )
+        .unwrap();
+
+        let route = routes.iter().find(|(key, _)| key == "example").unwrap();
+        assert_eq!(route.1.canonical_route, "example");
+        assert_eq!(route.1.upstream, "https://api.example.com");
     }
 
     #[test]
@@ -696,7 +737,7 @@ mod header_tests {
 
 /// Token registry tests
 mod registry_tests {
-    use coco_gateway::{TokenRegistry, TokenStatus};
+    use coco_gateway::{TokenCreateError, TokenRegistry, TokenStatus};
     use tempfile::TempDir;
 
     async fn create_registry() -> (TokenRegistry, TempDir) {
@@ -711,7 +752,8 @@ mod registry_tests {
         let (registry, _dir) = create_registry().await;
         let (record, token_value) = registry
             .create_token("test".to_string(), vec![], true)
-            .await;
+            .await
+            .unwrap();
 
         assert!(token_value.starts_with("ccgw_"));
         assert_eq!(record.name, "test");
@@ -727,7 +769,8 @@ mod registry_tests {
         let (registry, _dir) = create_registry().await;
         registry
             .create_token("test".to_string(), vec![], true)
-            .await;
+            .await
+            .unwrap();
 
         let validated = registry.validate("ccgw_wrong").await;
         assert!(validated.is_none());
@@ -738,7 +781,8 @@ mod registry_tests {
         let (registry, _dir) = create_registry().await;
         let (record, token_value) = registry
             .create_token("test".to_string(), vec![], true)
-            .await;
+            .await
+            .unwrap();
 
         assert!(registry.validate(&token_value).await.is_some());
         assert!(registry.revoke_token(record.id).await);
@@ -752,8 +796,12 @@ mod registry_tests {
         let (registry, _dir) = create_registry().await;
         registry
             .create_token("laptop".to_string(), vec!["anthropic".to_string()], false)
-            .await;
-        registry.create_token("ci".to_string(), vec![], true).await;
+            .await
+            .unwrap();
+        registry
+            .create_token("ci".to_string(), vec![], true)
+            .await
+            .unwrap();
 
         let tokens = registry.list_tokens().await;
         assert_eq!(tokens.len(), 2);
@@ -770,7 +818,8 @@ mod registry_tests {
             let registry = TokenRegistry::load_or_create(path.clone()).await.unwrap();
             let (_, token) = registry
                 .create_token("persist".to_string(), vec![], true)
-                .await;
+                .await
+                .unwrap();
             token
         };
 
@@ -783,7 +832,8 @@ mod registry_tests {
         let (registry, _dir) = create_registry().await;
         let (_record, scoped_token) = registry
             .create_token("scoped".to_string(), vec!["openai".to_string()], false)
-            .await;
+            .await
+            .unwrap();
 
         let validated = registry.validate(&scoped_token).await.unwrap();
         assert_eq!(validated.scope, vec!["openai"]);
@@ -795,12 +845,37 @@ mod registry_tests {
     #[tokio::test]
     async fn test_empty_scope_allows_all_routes() {
         let (registry, _dir) = create_registry().await;
-        let (_record, token) = registry.create_token("all".to_string(), vec![], true).await;
+        let (_record, token) = registry
+            .create_token("all".to_string(), vec![], true)
+            .await
+            .unwrap();
 
         let validated = registry.validate(&token).await.unwrap();
         assert!(validated.is_all_routes());
         assert!(validated.allows_route("openai"));
         assert!(validated.allows_route("future-route"));
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_token_name_is_rejected() {
+        let (registry, _dir) = create_registry().await;
+        registry
+            .create_token("laptop".to_string(), vec!["openai".to_string()], false)
+            .await
+            .unwrap();
+
+        let error = registry
+            .create_token("laptop".to_string(), vec!["anthropic".to_string()], false)
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            TokenCreateError::DuplicateName {
+                name: "laptop".to_string()
+            }
+        );
+        assert_eq!(registry.list_tokens().await.len(), 1);
     }
 
     #[tokio::test]

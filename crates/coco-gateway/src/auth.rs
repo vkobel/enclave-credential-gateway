@@ -262,7 +262,8 @@ mod tests {
             .unwrap();
         let (_record, token) = registry
             .create_token("claude".to_string(), vec!["anthropic".to_string()], false)
-            .await;
+            .await
+            .unwrap();
         let req = Request::builder()
             .uri("/anthropic/v1/messages")
             .header("x-api-key", token)
@@ -285,7 +286,8 @@ mod tests {
             .unwrap();
         let (_record, token) = registry
             .create_token("claude".to_string(), vec!["anthropic".to_string()], false)
-            .await;
+            .await
+            .unwrap();
         let req = Request::builder()
             .uri("/anthropic/v1/messages")
             .header("authorization", "Bearer claude-ai-session-token")

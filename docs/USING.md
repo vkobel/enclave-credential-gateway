@@ -47,7 +47,7 @@ scope = ["github", "anthropic", "openai"]
 all_routes = false
 ```
 
-> Built-in routes: `github`, `anthropic`, `openai`. Tool adapters: `gh`, `codex`, `claude-code`. Routes and adapters live in the embedded `profiles/coco.yaml` manifest. GitHub owns an `api` compatibility alias for `gh`; `/api/v3/...` scopes as `github`.
+> Built-in routes: `github`, `anthropic`, `openai`. Tool adapters: `gh`, `codex`, `claude-code`. Routes and adapters live in the embedded `profiles/routes` and `profiles/tools` directories. GitHub owns an `api` compatibility alias for `gh`; `/api/v3/...` scopes as `github`.
 
 ---
 
@@ -216,7 +216,7 @@ Revocation takes effect immediately. In-flight requests complete; all subsequent
 |---|---|---|
 | `407 Proxy Authentication Required` | Wrong or missing phantom token | Check `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` match your token value |
 | `403 Forbidden` | Token doesn't have this route in its scope | Recreate token with correct `--scope`, or use `--all-routes` for all routes |
-| `404 Not Found` | Unknown route prefix | Check the prefix matches a built-in route key in `profiles/coco.yaml` |
+| `404 Not Found` | Unknown route prefix | Check the prefix matches a built-in route key in `profiles/routes` |
 | `503 Service Unavailable` | Real credential env var missing on the gateway | Set the credential env var and restart |
 | `coco activate` fails | Token not in config file | Add `[tokens.<name>]` with `token = "ccgw_..."` to `~/.config/coco/config.toml` |
 | `GH_HOST` is wrong | Set to full URL instead of hostname | `GH_HOST` must be just the hostname (`gw.example.com`), not a URL |
