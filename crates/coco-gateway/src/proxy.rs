@@ -160,13 +160,21 @@ pub fn resolve_credential(
     sources: &[CredentialSource],
     preferred: Option<usize>,
 ) -> Option<(&CredentialSource, String)> {
+    resolve_credential_with(sources, preferred, |env| std::env::var(env).ok())
+}
+
+fn resolve_credential_with(
+    sources: &[CredentialSource],
+    preferred: Option<usize>,
+    mut get_env: impl FnMut(&str) -> Option<String>,
+) -> Option<(&CredentialSource, String)> {
     let matches = |src: &CredentialSource, v: &str| -> bool {
         !v.is_empty() && src.prefix.as_deref().is_none_or(|p| v.starts_with(p))
     };
 
     if let Some(i) = preferred {
         if let Some(src) = sources.get(i) {
-            if let Ok(v) = std::env::var(&src.env) {
+            if let Some(v) = get_env(&src.env) {
                 if matches(src, &v) {
                     return Some((src, v));
                 }
@@ -174,8 +182,7 @@ pub fn resolve_credential(
         }
     }
     sources.iter().find_map(|src| {
-        std::env::var(&src.env)
-            .ok()
+        get_env(&src.env)
             .filter(|v| matches(src, v))
             .map(|v| (src, v))
     })
@@ -183,7 +190,7 @@ pub fn resolve_credential(
 
 #[cfg(test)]
 mod tests {
-    use super::remove_client_credential_headers;
+    use super::{remove_client_credential_headers, resolve_credential_with};
     use crate::profile::CredentialSource;
     use axum::http::{HeaderMap, HeaderValue};
 
@@ -193,6 +200,20 @@ mod tests {
             inject_header: header.to_string(),
             format: "{}".to_string(),
             prefix: None,
+            basic_user: None,
+        }
+    }
+
+    fn anthropic_source(header: &str, prefix: Option<&str>) -> CredentialSource {
+        CredentialSource {
+            env: "ANTHROPIC_API_KEY".to_string(),
+            inject_header: header.to_string(),
+            format: if header == "Authorization" {
+                "Bearer {}".to_string()
+            } else {
+                "{}".to_string()
+            },
+            prefix: prefix.map(str::to_string),
             basic_user: None,
         }
     }
@@ -216,5 +237,22 @@ mod tests {
         assert!(!headers.contains_key("authorization"));
         assert!(!headers.contains_key("x-api-key"));
         assert!(headers.contains_key("content-type"));
+    }
+
+    #[test]
+    fn unpreferred_anthropic_resolution_uses_secret_prefix() {
+        let sources = [
+            anthropic_source("Authorization", Some("sk-ant-oat")),
+            anthropic_source("x-api-key", None),
+        ];
+
+        let resolved = resolve_credential_with(&sources, None, |env| match env {
+            "ANTHROPIC_API_KEY" => Some("sk-ant-oat-local".to_string()),
+            _ => None,
+        })
+        .expect("credential should resolve");
+
+        assert_eq!(resolved.0.inject_header, "Authorization");
+        assert_eq!(resolved.1, "sk-ant-oat-local");
     }
 }

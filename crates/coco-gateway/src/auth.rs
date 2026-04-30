@@ -111,14 +111,14 @@ fn registry_auth_candidates(
     sources: &[CredentialSource],
 ) -> Vec<(String, String, Option<usize>)> {
     let mut candidates = Vec::new();
-    for (i, src) in sources.iter().enumerate() {
+    for src in sources {
         let header_lower = src.inject_header.to_lowercase();
         let Some(v) = req.headers().get(header_lower.as_str()) else {
             continue;
         };
         let Ok(s) = v.to_str() else { continue };
         for candidate in header_candidate_tokens(s, true) {
-            candidates.push((candidate, header_lower.clone(), Some(i)));
+            candidates.push((candidate, header_lower.clone(), None));
         }
     }
 
@@ -271,7 +271,7 @@ mod tests {
         let auth = find_registry_auth(&registry, candidates).await.unwrap();
 
         assert_eq!(auth.header, "x-api-key");
-        assert_eq!(auth.preferred_source, Some(0));
+        assert_eq!(auth.preferred_source, None);
         assert_eq!(auth.token_record.unwrap().name, "claude");
     }
 
@@ -295,7 +295,7 @@ mod tests {
         let auth = find_registry_auth(&registry, candidates).await.unwrap();
 
         assert_eq!(auth.header, "x-api-key");
-        assert_eq!(auth.preferred_source, Some(0));
+        assert_eq!(auth.preferred_source, None);
         assert_eq!(auth.token_record.unwrap().name, "claude");
     }
 }
