@@ -1,4 +1,4 @@
-# CoCo Credential Gateway — Product Vision
+# CoCo Credential Gateway — Vision
 
 ## What this is
 
@@ -328,9 +328,8 @@ Each step is a direction, not a commitment. Each is justified by what v1
 
 **v3 — enterprise / regulated.**
 - Mutual attestation. A hardened local companion (Secure-Enclave-backed
-  client identity, descended from `d-inference`) that authenticates the
-  device to the gateway, with the gateway's `MRTD` pinned in the
-  companion's signed config.
+  client identity) that authenticates the device to the gateway, with the
+  gateway's `MRTD` pinned in the companion's signed config.
 - OIDC issuance (Okta, Entra) bound to MDM-enrolled device identity.
 - Signed per-call receipts under an attested gateway key.
 - Substrate portability beyond Phala (Azure Confidential, GCP Confidential,
