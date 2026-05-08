@@ -1,6 +1,6 @@
 # Enclave Credential Gateway
 
-Enclave Credential Gateway is early work toward a TEE-backed credential gateway for AI agents. The working gateway already lets clients use scoped phantom tokens (`gate_...`) instead of real vendor keys; the next milestone is moving the trust boundary into Intel TDX with attestation and reproducible release artifacts.
+**Status: alpha / early implementation.** Enclave Credential Gateway is early work toward a TEE-backed credential gateway for AI agents. The working gateway already lets clients use scoped phantom tokens (`gate_...`) instead of real vendor keys, but the TEE trust boundary, attestation flow, sealed credential storage, and reproducible release verification are not implemented yet.
 
 **Core idea:** credentials should be infrastructure, not agent state.
 
