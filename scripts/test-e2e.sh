@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# test-e2e.sh — coco-gateway end-to-end tests
+# test-e2e.sh — enclave-credential-gateway end-to-end tests
 #
 # Starts the gateway with docker compose, creates scoped registry tokens through
 # the admin API, validates routing/auth behavior, checks CLI activation flows,
 # and tears the compose project down on exit unless a gateway was already up.
 #
 # Usage:
-#   export COCO_ADMIN_TOKEN=test-admin       # optional; defaults to test-admin
+#   export GATE_ADMIN_TOKEN=test-admin       # optional; defaults to test-admin
 #   export OPENAI_API_KEY=sk-...            # optional, enables live OpenAI test
 #   export ANTHROPIC_API_KEY=sk-ant-api-... # optional, enables live Anthropic test
 #   export GITHUB_TOKEN=ghp_...            # optional, enables live GitHub REST + git tests
@@ -16,14 +16,9 @@
 
 set -euo pipefail
 
-GATEWAY_PORT="${COCO_E2E_PORT:-8080}"
-COMPOSE_PROJECT="coco-validate-$$"
-COCO_ADMIN_TOKEN="${COCO_ADMIN_TOKEN:-test-admin}"
-COCO_E2E_RUN_ID="${COCO_E2E_RUN_ID:-$(date +%Y%m%d%H%M%S)-$$}"
-E2E_ALL_NAME="e2e-all-${COCO_E2E_RUN_ID}"
-E2E_OPENAI_NAME="e2e-openai-${COCO_E2E_RUN_ID}"
-E2E_GITHUB_NAME="e2e-github-${COCO_E2E_RUN_ID}"
-E2E_REVOKED_NAME="e2e-revoked-${COCO_E2E_RUN_ID}"
+GATEWAY_PORT="${GATE_E2E_PORT:-8080}"
+COMPOSE_PROJECT="gate-validate-$$"
+GATE_ADMIN_TOKEN="${GATE_ADMIN_TOKEN:-test-admin}"
 REAL_HOME="${HOME:-}"
 PASS=0; FAIL=0; SKIP=0
 GW_ALREADY_RUNNING=false
@@ -39,8 +34,43 @@ GW_TMPFILE=""
 CLI_HOME=""
 COMPOSE_OVERRIDE=""
 GH_E2E_WORKDIR=""
+E2E_TOKEN_IDS=()
+E2E_TOKENS_REVOKED=false
+
+revoke_e2e_tokens() {
+  [[ "$E2E_TOKENS_REVOKED" == true ]] && return 0
+  E2E_TOKENS_REVOKED=true
+  [[ ${#E2E_TOKEN_IDS[@]} -eq 0 ]] && return 0
+
+  info "Revoking e2e registry tokens"
+  local token_id status revoked=0 failed=0
+  for token_id in "${E2E_TOKEN_IDS[@]}"; do
+    status=$(curl -s -o /dev/null -w "%{http_code}" \
+      -X DELETE "http://localhost:${GATEWAY_PORT}/admin/tokens/${token_id}" \
+      -H "Authorization: Bearer ${GATE_ADMIN_TOKEN}" 2>/dev/null || echo "000")
+    case "$status" in
+      200|404)
+        revoked=$((revoked+1))
+        ;;
+      *)
+        failed=$((failed+1))
+        echo "    Failed to revoke token ${token_id} (status ${status})"
+        ;;
+    esac
+  done
+
+  if [[ "$failed" -eq 0 ]]; then
+    info "Revoked ${revoked} e2e registry token(s)"
+    return 0
+  else
+    info "Revoked ${revoked} e2e registry token(s), ${failed} failed"
+    return 1
+  fi
+}
+
 cleanup() {
   echo
+  revoke_e2e_tokens || true
   [[ -n "$GW_TMPFILE" && -f "$GW_TMPFILE" ]] && rm -f "$GW_TMPFILE"
   [[ -n "$CLI_HOME" && -d "$CLI_HOME" ]] && rm -rf "$CLI_HOME"
   [[ -n "$GH_E2E_WORKDIR" && -d "$GH_E2E_WORKDIR" ]] && rm -rf "$GH_E2E_WORKDIR"
@@ -77,25 +107,25 @@ if curl -s -o /dev/null --connect-timeout 1 "http://localhost:${GATEWAY_PORT}/" 
   GW_ALREADY_RUNNING=true
   pass "Gateway is already running (port $GATEWAY_PORT) — skipping docker compose up"
   status=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
-    -H "Authorization: Bearer ${COCO_ADMIN_TOKEN}" \
+    -H "Authorization: Bearer ${GATE_ADMIN_TOKEN}" \
     "http://localhost:${GATEWAY_PORT}/admin/tokens" 2>/dev/null)
   if [[ "$status" != "200" ]]; then
-    if [[ -z "${COCO_E2E_PORT:-}" && "$GATEWAY_PORT" == "8080" ]]; then
-      info "Existing gateway rejected COCO_ADMIN_TOKEN; starting isolated compose gateway on port 18080"
+    if [[ -z "${GATE_E2E_PORT:-}" && "$GATEWAY_PORT" == "8080" ]]; then
+      info "Existing gateway rejected GATE_ADMIN_TOKEN; starting isolated compose gateway on port 18080"
       GW_ALREADY_RUNNING=false
       GATEWAY_PORT=18080
       if curl -s -o /dev/null --connect-timeout 1 "http://localhost:${GATEWAY_PORT}/" 2>/dev/null; then
         echo -e "${RED}ERROR: fallback port ${GATEWAY_PORT} is also occupied.${NC}"
-        echo "Set COCO_E2E_PORT to a free port or stop the process using 8080."
+        echo "Set GATE_E2E_PORT to a free port or stop the process using 8080."
         exit 1
       fi
     else
-      echo -e "${RED}ERROR: existing gateway rejected COCO_ADMIN_TOKEN (expected admin probe 200, got $status).${NC}"
+      echo -e "${RED}ERROR: existing gateway rejected GATE_ADMIN_TOKEN (expected admin probe 200, got $status).${NC}"
       echo "Stop the process on port ${GATEWAY_PORT} or rerun with the admin token for that gateway."
       exit 1
     fi
   else
-    pass "Existing gateway accepted COCO_ADMIN_TOKEN"
+    pass "Existing gateway accepted GATE_ADMIN_TOKEN"
   fi
 fi
 
@@ -103,7 +133,7 @@ if [[ "$GW_ALREADY_RUNNING" != true ]]; then
   COMPOSE_OVERRIDE=$(mktemp)
   cat > "$COMPOSE_OVERRIDE" <<EOF
 services:
-  coco-gateway:
+  enclave-credential-gateway:
     ports:
       - "${GATEWAY_PORT}:8080"
   caddy:
@@ -112,7 +142,7 @@ services:
 EOF
 
   info "Running: docker compose up --build --detach"
-  COCO_ADMIN_TOKEN="$COCO_ADMIN_TOKEN" docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml -f "$COMPOSE_OVERRIDE" up --build --detach 2>&1 | tail -5
+  GATE_ADMIN_TOKEN="$GATE_ADMIN_TOKEN" docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml -f "$COMPOSE_OVERRIDE" up --build --detach 2>&1 | tail -5
 
   info "Waiting for gateway to respond"
   for i in $(seq 1 30); do
@@ -153,7 +183,7 @@ create_token() {
   local all_routes="${3:-false}"
   GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
     -X POST "http://localhost:${GATEWAY_PORT}/admin/tokens" \
-    -H "Authorization: Bearer ${COCO_ADMIN_TOKEN}" \
+    -H "Authorization: Bearer ${GATE_ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "{\"name\":\"${name}\",\"scope\":${scope_json},\"all_routes\":${all_routes}}" 2>/dev/null)
   GW_BODY=$(cat "$GW_TMPFILE")
@@ -161,6 +191,7 @@ create_token() {
   if [[ "$GW_STATUS" == "200" ]]; then
     CREATED_TOKEN=$(echo "$GW_BODY" | jq -r '.token')
     CREATED_TOKEN_ID=$(echo "$GW_BODY" | jq -r '.id')
+    E2E_TOKEN_IDS+=("$CREATED_TOKEN_ID")
     pass "Created token '$name' with scope $scope_json all_routes=$all_routes"
   else
     fail "Create token '$name' — expected 200, got $GW_STATUS"
@@ -174,7 +205,7 @@ create_token "$E2E_ALL_NAME" '[]' true
 ALL_TOKEN="$CREATED_TOKEN"
 GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
   -X POST "http://localhost:${GATEWAY_PORT}/admin/tokens" \
-  -H "Authorization: Bearer ${COCO_ADMIN_TOKEN}" \
+  -H "Authorization: Bearer ${GATE_ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
   -d "{\"name\":\"${E2E_ALL_NAME}\",\"scope\":[\"openai\"],\"all_routes\":false}" 2>/dev/null)
 GW_BODY=$(cat "$GW_TMPFILE")
@@ -210,7 +241,7 @@ gw_request_token GET /anthropic/ "$OPENAI_SCOPED_TOKEN"
 
 GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
   -X DELETE "http://localhost:${GATEWAY_PORT}/admin/tokens/${REVOKED_TOKEN_ID}" \
-  -H "Authorization: Bearer ${COCO_ADMIN_TOKEN}" 2>/dev/null)
+  -H "Authorization: Bearer ${GATE_ADMIN_TOKEN}" 2>/dev/null)
 [[ "$GW_STATUS" == "200" ]] && pass "Revoked registry token" || fail "Revocation → expected 200, got $GW_STATUS"
 
 gw_request_token GET /openai/ "$REVOKED_TOKEN"
@@ -299,10 +330,10 @@ status=$(curl -s -o /dev/null -w "%{http_code}" \
 section "CLI activation"
 
 CLI_HOME=$(mktemp -d)
-mkdir -p "$CLI_HOME/.config/coco"
-cat > "$CLI_HOME/.config/coco/config.toml" <<EOF
+mkdir -p "$CLI_HOME/.config/gate"
+cat > "$CLI_HOME/.config/gate/config.toml" <<EOF
 gateway_url = "http://localhost:${GATEWAY_PORT}"
-admin_token = "${COCO_ADMIN_TOKEN}"
+admin_token = "${GATE_ADMIN_TOKEN}"
 
 [tokens.laptop]
 token = "${ALL_TOKEN}"
@@ -318,27 +349,27 @@ EOF
 CLI_STDOUT="$CLI_HOME/stdout.txt"
 CLI_STDERR="$CLI_HOME/stderr.txt"
 TARGET_DIR="${CARGO_TARGET_DIR:-target}"
-COCO_BIN="${TARGET_DIR%/}/debug/coco"
+GATE_BIN="${TARGET_DIR%/}/debug/gate"
 CLI_ENV=(HOME="$CLI_HOME")
 [[ -n "${CARGO_HOME:-}" ]] && CLI_ENV+=(CARGO_HOME="$CARGO_HOME")
 [[ -z "${CARGO_HOME:-}" && -n "$REAL_HOME" ]] && CLI_ENV+=(CARGO_HOME="$REAL_HOME/.cargo")
 [[ -n "${RUSTUP_HOME:-}" ]] && CLI_ENV+=(RUSTUP_HOME="$RUSTUP_HOME")
 [[ -z "${RUSTUP_HOME:-}" && -n "$REAL_HOME" ]] && CLI_ENV+=(RUSTUP_HOME="$REAL_HOME/.rustup")
 
-if cargo build -q -p coco-cli; then
-  pass "Built coco CLI"
+if cargo build -q -p gate-cli; then
+  pass "Built gate CLI"
 else
-  fail "cargo build -p coco-cli failed"
+  fail "cargo build -p gate-cli failed"
 fi
 
-if [[ ! -x "$COCO_BIN" ]]; then
-  fail "Built coco CLI binary not found at $COCO_BIN"
+if [[ ! -x "$GATE_BIN" ]]; then
+  fail "Built gate CLI binary not found at $GATE_BIN"
 fi
 
-if env "${CLI_ENV[@]}" "$COCO_BIN" activate github_only --eval >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
-  pass "coco activate succeeds for non-OpenAI token"
+if env "${CLI_ENV[@]}" "$GATE_BIN" activate github_only --eval >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
+  pass "gate activate succeeds for non-OpenAI token"
 else
-  fail "coco activate should not fail for non-OpenAI token"
+  fail "gate activate should not fail for non-OpenAI token"
 fi
 
 grep -q "export GH_HOST=localhost:${GATEWAY_PORT}" "$CLI_STDOUT" \
@@ -346,24 +377,24 @@ grep -q "export GH_HOST=localhost:${GATEWAY_PORT}" "$CLI_STDOUT" \
   || fail "github-only env exports missing"
 
 [[ ! -s "$CLI_STDERR" ]] \
-  && pass "coco activate is quiet" \
-  || fail "coco activate wrote unexpected stderr: $(head -1 "$CLI_STDERR")"
+  && pass "gate activate is quiet" \
+  || fail "gate activate wrote unexpected stderr: $(head -1 "$CLI_STDERR")"
 
 [[ ! -f "$CLI_HOME/.codex/config.toml" ]] \
   && pass "non-OpenAI activate does not write Codex config" \
   || fail "non-OpenAI activate wrote Codex config"
 
-if env "${CLI_ENV[@]}" "$COCO_BIN" activate laptop --eval --tool codex >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
-  pass "coco activate --eval --tool codex writes generated Codex config"
+if env "${CLI_ENV[@]}" "$GATE_BIN" activate laptop --eval --tool codex >"$CLI_STDOUT" 2>"$CLI_STDERR"; then
+  pass "gate activate --eval --tool codex writes generated Codex config"
 else
-  fail "coco activate --eval --tool codex should write generated Codex config"
+  fail "gate activate --eval --tool codex should write generated Codex config"
 fi
 
-grep -q "export CODEX_HOME=.*\\.config/coco/generated/codex/laptop/home" "$CLI_STDOUT" \
+grep -q "export CODEX_HOME=.*\\.config/gate/generated/codex/laptop/home" "$CLI_STDOUT" \
   && pass "Codex eval exports generated CODEX_HOME" \
   || fail "Codex eval missing generated CODEX_HOME"
 
-grep -q "openai_base_url = \"http://localhost:${GATEWAY_PORT}/openai/v1\"" "$CLI_HOME/.config/coco/generated/codex/laptop/home/config.toml" \
+grep -q "openai_base_url = \"http://localhost:${GATEWAY_PORT}/openai/v1\"" "$CLI_HOME/.config/gate/generated/codex/laptop/home/config.toml" \
   && pass "Generated Codex config points at gateway OpenAI route" \
   || fail "Generated Codex config missing gateway OpenAI route"
 
@@ -371,10 +402,10 @@ section "Route: anthropic"
 
 if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
   skip "ANTHROPIC_API_KEY not set — skipping Anthropic test"
-elif [[ "${ANTHROPIC_API_KEY}" == ccgw_* ]]; then
-  skip "ANTHROPIC_API_KEY contains a CoCo phantom token — set it to the real Anthropic key for live gateway tests"
-elif [[ "${COCO_TEST_ANTHROPIC_MODE:-apikey}" == "oauth" ]]; then
-  info "COCO_TEST_ANTHROPIC_MODE=oauth — testing Claude Code OAuth path"
+elif [[ "${ANTHROPIC_API_KEY}" == gate_* ]]; then
+  skip "ANTHROPIC_API_KEY contains a Enclave Credential Gateway phantom token — set it to the real Anthropic key for live gateway tests"
+elif [[ "${GATE_TEST_ANTHROPIC_MODE:-apikey}" == "oauth" ]]; then
+  info "GATE_TEST_ANTHROPIC_MODE=oauth — testing Claude Code OAuth path"
   GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
     -X POST "http://localhost:${GATEWAY_PORT}/anthropic/v1/messages" \
     -H "Authorization: Bearer ${ALL_TOKEN}" \
@@ -397,7 +428,7 @@ elif [[ "${COCO_TEST_ANTHROPIC_MODE:-apikey}" == "oauth" ]]; then
     && pass "Response has content ($content_len block(s))" \
     || fail "Response missing content field"
 else
-  info "Testing regular API key path — set COCO_TEST_ANTHROPIC_MODE=oauth for Claude Code OAuth"
+  info "Testing regular API key path — set GATE_TEST_ANTHROPIC_MODE=oauth for Claude Code OAuth"
   GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
     -X POST "http://localhost:${GATEWAY_PORT}/anthropic/v1/messages" \
     -H "x-api-key: ${ALL_TOKEN}" \
@@ -448,8 +479,8 @@ else
 GH_E2E_WORKDIR=$(mktemp -d)
 
 export HOME="$CLI_HOME"
-export PATH="${COCO_BIN%/*}:$PATH"
-eval "$("$COCO_BIN" activate github_only --eval --tool gh)"
+export PATH="${GATE_BIN%/*}:$PATH"
+eval "$("$GATE_BIN" activate github_only --eval --tool gh)"
 export GIT_TERMINAL_PROMPT=0
 
 # Resolve authenticated username
@@ -466,7 +497,7 @@ fi
 
 if [[ -n "$gh_user" ]]; then
 
-GH_E2E_REPO="${gh_user}/coco-gateway-e2e"
+GH_E2E_REPO="${gh_user}/enclave-credential-gateway-e2e"
 
 # Pre-cleanup from any previous run (best effort; 403 = no delete_repo scope)
 curl -s -o /dev/null -X DELETE \
@@ -478,7 +509,7 @@ GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
   -X POST \
   -H "Authorization: Bearer ${GITHUB_SCOPED_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d "{\"name\":\"coco-gateway-e2e\",\"private\":true,\"auto_init\":false,\"description\":\"coco-gateway e2e — safe to delete\"}" \
+  -d "{\"name\":\"enclave-credential-gateway-e2e\",\"private\":true,\"auto_init\":false,\"description\":\"enclave-credential-gateway e2e — safe to delete\"}" \
   "http://localhost:${GATEWAY_PORT}/github/user/repos" 2>/dev/null)
 [[ "$GW_STATUS" == "201" ]] \
   && pass "GitHub REST: created private repo ${GH_E2E_REPO}" \
@@ -493,7 +524,7 @@ GW_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
   || fail "GitHub REST: view repo → expected 200, got $GW_STATUS"
 
 # Clone via git smart-HTTP. Remote URL has no embedded token; the Git
-# credential helper emitted by `coco activate --eval --tool gh` supplies Basic auth.
+# credential helper emitted by `gate activate --eval --tool gh` supplies Basic auth.
 git_remote="http://localhost:${GATEWAY_PORT}/${GH_E2E_REPO}.git"
 if git clone -q "$git_remote" "${GH_E2E_WORKDIR}/repo" 2>/dev/null; then
   pass "git clone via gateway (smart-HTTP, credential helper)"
@@ -503,15 +534,15 @@ fi
 
 remote_url=$(git -C "${GH_E2E_WORKDIR}/repo" remote get-url origin 2>/dev/null || true)
 case "$remote_url" in
-  *"${GITHUB_SCOPED_TOKEN}"*|*ccgw_*) fail "git remote URL contains a token" ;;
+  *"${GITHUB_SCOPED_TOKEN}"*|*gate_*) fail "git remote URL contains a token" ;;
   *)                                  pass "git remote URL remains token-free" ;;
 esac
 
 # Push initial commit (tests git-receive-pack path)
 cd "${GH_E2E_WORKDIR}/repo"
-git config user.email "test@coco.local"
-git config user.name "CoCo E2E"
-echo "# coco-gateway-e2e" > README.md
+git config user.email "test@gate.local"
+git config user.name "Enclave Credential Gateway E2E"
+echo "# enclave-credential-gateway-e2e" > README.md
 git add README.md
 git commit -q -m "init"
 git branch -M main
@@ -526,7 +557,7 @@ GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
   -X POST \
   -H "Authorization: Bearer ${GITHUB_SCOPED_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"title":"e2e test issue","body":"created by coco-gateway e2e"}' \
+  -d '{"title":"e2e test issue","body":"created by enclave-credential-gateway e2e"}' \
   "http://localhost:${GATEWAY_PORT}/github/repos/${GH_E2E_REPO}/issues" 2>/dev/null)
 GH_ISSUE_NUM=$(cat "$GW_TMPFILE" | jq -r '.number // empty')
 [[ "$GW_STATUS" == "201" && -n "$GH_ISSUE_NUM" ]] \
@@ -550,7 +581,7 @@ GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
   -X POST \
   -H "Authorization: Bearer ${GITHUB_SCOPED_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"title":"e2e test PR","body":"created by coco-gateway e2e","head":"feat/e2e-pr","base":"main"}' \
+  -d '{"title":"e2e test PR","body":"created by enclave-credential-gateway e2e","head":"feat/e2e-pr","base":"main"}' \
   "http://localhost:${GATEWAY_PORT}/github/repos/${GH_E2E_REPO}/pulls" 2>/dev/null)
 GH_PR_NUM=$(cat "$GW_TMPFILE" | jq -r '.number // empty')
 [[ "$GW_STATUS" == "201" && -n "$GH_PR_NUM" ]] \
@@ -620,6 +651,13 @@ fi # gh_user
 unset GIT_TERMINAL_PROMPT
 
 fi # GITHUB_TOKEN
+
+section "E2E token cleanup"
+if revoke_e2e_tokens; then
+  pass "Revoked e2e registry tokens"
+else
+  fail "Revoked e2e registry tokens"
+fi
 
 echo
 echo "════════════════════════════════════"
