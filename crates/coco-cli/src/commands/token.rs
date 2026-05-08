@@ -1,5 +1,6 @@
 use crate::client::{admin_url, http_client};
 use crate::config::Config;
+use crate::secure_file::validate_path_component;
 use crate::tooling;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,7 @@ struct CreateRequest {
 }
 
 pub async fn create(name: &str, scope: &[String], all_routes: bool) -> Result<()> {
+    validate_token_name(name)?;
     validate_scope(scope, all_routes)?;
 
     let config = Config::load()?;
@@ -133,6 +135,10 @@ pub async fn list() -> Result<()> {
     Ok(())
 }
 
+fn validate_token_name(name: &str) -> Result<()> {
+    validate_path_component(name, "token name")
+}
+
 fn validate_scope(scope: &[String], all_routes: bool) -> Result<()> {
     if all_routes && !scope.is_empty() {
         anyhow::bail!("use either --scope or --all-routes, not both");
@@ -156,6 +162,19 @@ fn validate_scope(scope: &[String], all_routes: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_token_name;
+
+    #[test]
+    fn token_create_rejects_names_that_are_paths() {
+        for name in ["", ".", "..", "../escape", "nested/name", r"nested\name"] {
+            assert!(validate_token_name(name).is_err());
+        }
+        validate_token_name("laptop-1").unwrap();
+    }
 }
 
 pub async fn revoke(name: &str) -> Result<()> {

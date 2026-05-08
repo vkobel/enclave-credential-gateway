@@ -1,4 +1,5 @@
 use crate::config::{Config, TokenEntry};
+use crate::secure_file::{validate_path_component, write_secret_file};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
@@ -152,6 +153,7 @@ fn activate_with_manifest(
     let mut activation = Activation::default();
 
     for (tool, adapter) in manifest.tools {
+        validate_path_component(&tool, "tool adapter")?;
         if let Some(tool_filter) = tool_filter {
             if !tool_filter.iter().any(|requested| requested == &tool) {
                 continue;
@@ -307,10 +309,7 @@ fn materialize_managed_files(
             .join(validate_managed_path(relative_path)?);
         let content = render_template(&file.content, ctx, &managed_files)?;
         if mode != ActivationMode::Describe {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&path, content)
+            write_secret_file(&path, content)
                 .with_context(|| format!("Failed to write managed file for tool '{}'", tool))?;
         }
         managed_files.insert(file.id.clone(), path);
@@ -332,10 +331,7 @@ fn write_tool_file(
     let content = render_template(&file.content, ctx, managed_files)?;
 
     if mode != ActivationMode::Describe {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&path, content)
+        write_secret_file(&path, content)
             .with_context(|| format!("Failed to write config file for tool '{}'", tool))?;
     }
 
@@ -398,10 +394,7 @@ fn materialize_git_credential_config(
     );
 
     if mode != ActivationMode::Describe {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&path, content).with_context(|| {
+        write_secret_file(&path, content).with_context(|| {
             format!("Failed to write Git credential config for tool '{}'", tool)
         })?;
     }
@@ -452,6 +445,8 @@ impl<'a> ToolContext<'a> {
         tool: &'a str,
         route_filter: Option<&'a str>,
     ) -> Result<Self> {
+        validate_path_component(token_name, "token name")?;
+        validate_path_component(tool, "tool adapter")?;
         let entry = config
             .tokens
             .get(token_name)
@@ -697,7 +692,39 @@ env:
             let auth = std::fs::read_to_string(auth_path).unwrap();
             assert!(auth.contains("\"auth_mode\": \"apikey\""));
             assert!(auth.contains("\"OPENAI_API_KEY\": \"ccgw_test\""));
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+
+                let mode = std::fs::metadata(codex_home.join("auth.json"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777;
+                assert_eq!(mode, 0o600);
+            }
         });
+    }
+
+    #[test]
+    fn activation_rejects_token_names_that_are_paths() {
+        let mut config = config_with_scope(&["openai"]);
+        let entry = config.tokens.remove("laptop").unwrap();
+        config.tokens.insert("../escape".to_string(), entry);
+
+        let error = activate(
+            &config,
+            "../escape",
+            Some(&["codex".to_string()]),
+            None,
+            ActivationMode::Describe,
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("token name must be a single safe path component"));
     }
 
     #[test]

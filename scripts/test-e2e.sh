@@ -19,6 +19,11 @@ set -euo pipefail
 GATEWAY_PORT="${COCO_E2E_PORT:-8080}"
 COMPOSE_PROJECT="coco-validate-$$"
 COCO_ADMIN_TOKEN="${COCO_ADMIN_TOKEN:-test-admin}"
+COCO_E2E_RUN_ID="${COCO_E2E_RUN_ID:-$(date +%Y%m%d%H%M%S)-$$}"
+E2E_ALL_NAME="e2e-all-${COCO_E2E_RUN_ID}"
+E2E_OPENAI_NAME="e2e-openai-${COCO_E2E_RUN_ID}"
+E2E_GITHUB_NAME="e2e-github-${COCO_E2E_RUN_ID}"
+E2E_REVOKED_NAME="e2e-revoked-${COCO_E2E_RUN_ID}"
 REAL_HOME="${HOME:-}"
 PASS=0; FAIL=0; SKIP=0
 GW_ALREADY_RUNNING=false
@@ -165,13 +170,13 @@ create_token() {
 
 section "Registry tokens"
 
-create_token "e2e-all" '[]' true
+create_token "$E2E_ALL_NAME" '[]' true
 ALL_TOKEN="$CREATED_TOKEN"
 GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
   -X POST "http://localhost:${GATEWAY_PORT}/admin/tokens" \
   -H "Authorization: Bearer ${COCO_ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"name":"e2e-all","scope":["openai"],"all_routes":false}' 2>/dev/null)
+  -d "{\"name\":\"${E2E_ALL_NAME}\",\"scope\":[\"openai\"],\"all_routes\":false}" 2>/dev/null)
 GW_BODY=$(cat "$GW_TMPFILE")
 if [[ "$GW_STATUS" == "409" && "$GW_BODY" == *"already exists"* ]]; then
   pass "Duplicate token name rejected"
@@ -179,11 +184,11 @@ else
   fail "Duplicate token name — expected 409, got $GW_STATUS"
   echo "    Body: $(echo "$GW_BODY" | head -3)"
 fi
-create_token "e2e-openai" '["openai"]'
+create_token "$E2E_OPENAI_NAME" '["openai"]'
 OPENAI_SCOPED_TOKEN="$CREATED_TOKEN"
-create_token "e2e-github" '["github"]'
+create_token "$E2E_GITHUB_NAME" '["github"]'
 GITHUB_SCOPED_TOKEN="$CREATED_TOKEN"
-create_token "e2e-revoked" '["openai"]'
+create_token "$E2E_REVOKED_NAME" '["openai"]'
 REVOKED_TOKEN="$CREATED_TOKEN"
 REVOKED_TOKEN_ID="$CREATED_TOKEN_ID"
 

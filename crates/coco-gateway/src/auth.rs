@@ -9,7 +9,7 @@ use crate::validate_bearer_or_raw;
 use axum::{
     body::Body,
     extract::State,
-    http::{Request, StatusCode},
+    http::{HeaderMap, Request, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -78,11 +78,25 @@ fn header_candidate_tokens(value: &str, include_raw: bool) -> Vec<String> {
     candidates
 }
 
+fn extract_candidate_tokens_from_header(
+    headers: &HeaderMap,
+    header: &str,
+    include_raw: bool,
+) -> Vec<String> {
+    let mut candidates: Vec<String> = Vec::new();
+    for value in headers.get_all(header) {
+        let Ok(s) = value.to_str() else { continue };
+        for candidate in header_candidate_tokens(s, include_raw) {
+            push_unique(candidate, &mut candidates);
+        }
+    }
+    candidates
+}
+
 pub fn extract_candidate_tokens(req: &Request<Body>) -> Vec<String> {
     let mut candidates: Vec<String> = Vec::new();
-    for value in req.headers().values() {
-        let Ok(s) = value.to_str() else { continue };
-        for candidate in header_candidate_tokens(s, false) {
+    for header in ["authorization", "proxy-authorization"] {
+        for candidate in extract_candidate_tokens_from_header(req.headers(), header, false) {
             push_unique(candidate, &mut candidates);
         }
     }
@@ -113,17 +127,15 @@ fn registry_auth_candidates(
     let mut candidates = Vec::new();
     for src in sources {
         let header_lower = src.inject_header.to_lowercase();
-        let Some(v) = req.headers().get(header_lower.as_str()) else {
-            continue;
-        };
-        let Ok(s) = v.to_str() else { continue };
-        for candidate in header_candidate_tokens(s, true) {
+        for candidate in extract_candidate_tokens_from_header(req.headers(), &header_lower, true) {
             candidates.push((candidate, header_lower.clone(), None));
         }
     }
 
-    for candidate in extract_candidate_tokens(req) {
-        candidates.push((candidate, "authorization".to_string(), None));
+    for header in ["authorization", "proxy-authorization"] {
+        for candidate in extract_candidate_tokens_from_header(req.headers(), header, false) {
+            candidates.push((candidate, header.to_string(), None));
+        }
     }
 
     candidates
@@ -151,6 +163,16 @@ pub fn find_phantom_auth(
         if validate_bearer_or_raw(v.as_bytes(), token) {
             return Some(PhantomAuth {
                 header: "authorization".to_string(),
+                preferred_source: None,
+                token_record: None,
+            });
+        }
+    }
+
+    if let Some(v) = req.headers().get("proxy-authorization") {
+        if validate_bearer_or_raw(v.as_bytes(), token) {
+            return Some(PhantomAuth {
+                header: "proxy-authorization".to_string(),
                 preferred_source: None,
                 token_record: None,
             });
@@ -301,5 +323,50 @@ mod tests {
         assert_eq!(auth.header, "x-api-key");
         assert_eq!(auth.preferred_source, None);
         assert_eq!(auth.token_record.unwrap().name, "claude");
+    }
+
+    #[tokio::test]
+    async fn registry_auth_accepts_proxy_authorization_and_preserves_header() {
+        let dir = TempDir::new().unwrap();
+        let registry = TokenRegistry::load_or_create(dir.path().join("tokens.json"))
+            .await
+            .unwrap();
+        let (_record, token) = registry
+            .create_token("github".to_string(), vec!["github".to_string()], false)
+            .await
+            .unwrap();
+        let req = Request::builder()
+            .uri("/github/user")
+            .header("proxy-authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+
+        let candidates = super::registry_auth_candidates(&req, &[]);
+        let auth = find_registry_auth(&registry, candidates).await.unwrap();
+
+        assert_eq!(auth.header, "proxy-authorization");
+        assert_eq!(auth.token_record.unwrap().name, "github");
+    }
+
+    #[tokio::test]
+    async fn registry_auth_ignores_arbitrary_bearer_headers() {
+        let dir = TempDir::new().unwrap();
+        let registry = TokenRegistry::load_or_create(dir.path().join("tokens.json"))
+            .await
+            .unwrap();
+        let (_record, token) = registry
+            .create_token("github".to_string(), vec!["github".to_string()], false)
+            .await
+            .unwrap();
+        let req = Request::builder()
+            .uri("/github/user")
+            .header("x-random", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+
+        let candidates = super::registry_auth_candidates(&req, &[]);
+        let auth = find_registry_auth(&registry, candidates).await;
+
+        assert!(auth.is_none());
     }
 }

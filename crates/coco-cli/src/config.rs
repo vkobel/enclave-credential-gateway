@@ -1,3 +1,4 @@
+use crate::secure_file::write_secret_file;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -83,11 +84,8 @@ impl Config {
 
     pub fn save(&self) -> Result<()> {
         let path = Self::path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         let data = toml::to_string_pretty(self)?;
-        std::fs::write(&path, data)?;
+        write_secret_file(&path, data)?;
         Ok(())
     }
 }

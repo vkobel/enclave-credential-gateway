@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 mod client;
 mod commands;
 mod config;
+mod secure_file;
 #[cfg(test)]
 mod test_support;
 mod tooling;

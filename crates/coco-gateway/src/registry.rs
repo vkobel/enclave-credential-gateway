@@ -3,14 +3,16 @@
 use chrono::{DateTime, Utc};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use std::io;
 use std::path::PathBuf;
 use subtle::ConstantTimeEq;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum TokenCreateError {
     DuplicateName { name: String },
+    Persist { source: io::Error },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -95,7 +97,11 @@ impl TokenRegistry {
 
         tokens.push(record.clone());
         drop(tokens);
-        self.persist().await;
+        if let Err(source) = self.persist().await {
+            let mut tokens = self.tokens.write().await;
+            tokens.retain(|token| token.id != record.id);
+            return Err(TokenCreateError::Persist { source });
+        }
 
         Ok((record, token_value))
     }
@@ -119,27 +125,34 @@ impl TokenRegistry {
         self.tokens.read().await.clone()
     }
 
-    pub async fn revoke_token(&self, id: Uuid) -> bool {
+    pub async fn revoke_token(&self, id: Uuid) -> io::Result<bool> {
         let mut tokens = self.tokens.write().await;
         if let Some(record) = tokens.iter_mut().find(|r| r.id == id) {
+            let previous_status = record.status.clone();
             record.status = TokenStatus::Revoked;
             drop(tokens);
-            self.persist().await;
-            true
+            if let Err(error) = self.persist().await {
+                let mut tokens = self.tokens.write().await;
+                if let Some(record) = tokens.iter_mut().find(|r| r.id == id) {
+                    record.status = previous_status;
+                }
+                return Err(error);
+            }
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
-    async fn persist(&self) {
+    async fn persist(&self) -> io::Result<()> {
         if let Some(parent) = self.file_path.parent() {
-            let _ = tokio::fs::create_dir_all(parent).await;
+            tokio::fs::create_dir_all(parent).await?;
         }
         let tokens = self.tokens.read().await;
-        let data = serde_json::to_string_pretty(&*tokens).unwrap_or_default();
+        let data = serde_json::to_string_pretty(&*tokens).map_err(io::Error::other)?;
         let tmp_path = self.file_path.with_extension("tmp");
-        if tokio::fs::write(&tmp_path, &data).await.is_ok() {
-            let _ = tokio::fs::rename(&tmp_path, &self.file_path).await;
-        }
+        tokio::fs::write(&tmp_path, &data).await?;
+        tokio::fs::rename(&tmp_path, &self.file_path).await?;
+        Ok(())
     }
 }

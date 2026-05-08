@@ -115,13 +115,7 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, mut req: Request<
     let body = if client_upgrade.is_some() {
         Body::empty()
     } else {
-        match req.into_body().collect().await {
-            Ok(b) => Body::from(b.to_bytes()),
-            Err(e) => {
-                error!("Failed to read request body: {}", e);
-                return StatusCode::BAD_GATEWAY.into_response();
-            }
-        }
+        req.into_body()
     };
 
     let mut upstream_req = Request::builder().method(&method).uri(upstream_uri);
@@ -361,6 +355,27 @@ mod tests {
 
         assert!(!headers.contains_key("authorization"));
         assert!(!headers.contains_key("x-api-key"));
+        assert!(headers.contains_key("content-type"));
+    }
+
+    #[test]
+    fn removes_matched_proxy_authorization_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "proxy-authorization",
+            HeaderValue::from_static("Bearer ccgw"),
+        );
+        headers.insert("authorization", HeaderValue::from_static("Bearer upstream"));
+        headers.insert("content-type", HeaderValue::from_static("application/json"));
+
+        remove_client_credential_headers(
+            &mut headers,
+            &[source("Authorization")],
+            "proxy-authorization",
+        );
+
+        assert!(!headers.contains_key("proxy-authorization"));
+        assert!(!headers.contains_key("authorization"));
         assert!(headers.contains_key("content-type"));
     }
 

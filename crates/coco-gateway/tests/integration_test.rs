@@ -163,11 +163,22 @@ mod extract_candidate_tokens_tests {
         let r = Request::builder()
             .uri("/")
             .header("authorization", "Bearer ccgw_dup")
-            .header("x-other", "Bearer ccgw_dup")
+            .header("proxy-authorization", "Bearer ccgw_dup")
             .body(Body::empty())
             .unwrap();
         let cands = extract_candidate_tokens(&r);
         assert_eq!(cands.iter().filter(|c| c.as_str() == "ccgw_dup").count(), 1);
+    }
+
+    #[test]
+    fn arbitrary_bearer_headers_are_not_candidates() {
+        let r = Request::builder()
+            .uri("/")
+            .header("x-other", "Bearer ccgw_hidden")
+            .body(Body::empty())
+            .unwrap();
+        let cands = extract_candidate_tokens(&r);
+        assert!(cands.is_empty());
     }
 }
 
@@ -785,10 +796,17 @@ mod registry_tests {
             .unwrap();
 
         assert!(registry.validate(&token_value).await.is_some());
-        assert!(registry.revoke_token(record.id).await);
+        assert!(registry.revoke_token(record.id).await.unwrap());
 
         let validated = registry.validate(&token_value).await;
         assert!(validated.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_revoke_missing_token_returns_false() {
+        let (registry, _dir) = create_registry().await;
+
+        assert!(!registry.revoke_token(uuid::Uuid::new_v4()).await.unwrap());
     }
 
     #[tokio::test]
@@ -869,12 +887,10 @@ mod registry_tests {
             .await
             .unwrap_err();
 
-        assert_eq!(
+        assert!(matches!(
             error,
-            TokenCreateError::DuplicateName {
-                name: "laptop".to_string()
-            }
-        );
+            TokenCreateError::DuplicateName { name } if name == "laptop"
+        ));
         assert_eq!(registry.list_tokens().await.len(), 1);
     }
 

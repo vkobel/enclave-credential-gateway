@@ -12,9 +12,10 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::path::{Component, Path as FsPath};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
-use tracing::warn;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 const UNRESTRICTED_SCOPE_WARNING: &str = "Empty token scope allows all current and future routes.";
@@ -97,6 +98,9 @@ async fn create_token(
     };
 
     let known_routes = state.known_routes();
+    if let Err(message) = validate_token_name(&req.name) {
+        return (StatusCode::BAD_REQUEST, message).into_response();
+    }
     if let Err(message) = validate_token_scope(&req.scope, req.all_routes, &known_routes) {
         return (StatusCode::BAD_REQUEST, message).into_response();
     }
@@ -112,6 +116,10 @@ async fn create_token(
                 format!("token name '{}' already exists", name),
             )
                 .into_response()
+        }
+        Err(TokenCreateError::Persist { source }) => {
+            error!("Failed to persist created token: {}", source);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "failed to persist token").into_response();
         }
     };
     let warning = record
@@ -176,11 +184,33 @@ async fn revoke_token(State(state): State<Arc<AppState>>, Path(id): Path<Uuid>) 
         }
     };
 
-    if registry.revoke_token(id).await {
-        (StatusCode::OK, "Token revoked").into_response()
-    } else {
-        (StatusCode::NOT_FOUND, "Token not found").into_response()
+    match registry.revoke_token(id).await {
+        Ok(true) => (StatusCode::OK, "Token revoked").into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "Token not found").into_response(),
+        Err(error) => {
+            error!("Failed to persist revoked token: {}", error);
+            (StatusCode::INTERNAL_SERVER_ERROR, "failed to persist token").into_response()
+        }
     }
+}
+
+fn validate_token_name(name: &str) -> Result<(), String> {
+    let mut components = FsPath::new(name).components();
+    let first = components.next();
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || components.next().is_some()
+        || !matches!(first, Some(Component::Normal(component)) if component == name)
+    {
+        return Err(
+            "token name must be a single safe path component (not empty, '.', '..', or a path)"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn validate_token_scope(
@@ -215,7 +245,7 @@ fn validate_token_scope(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_token_scope;
+    use super::{validate_token_name, validate_token_scope};
 
     fn known_routes() -> Vec<String> {
         ["anthropic", "github", "openai"]
@@ -228,6 +258,17 @@ mod tests {
     fn rejects_empty_scope_without_all_routes() {
         let error = validate_token_scope(&[], false, &known_routes()).unwrap_err();
         assert!(error.contains("scope must be non-empty"));
+    }
+
+    #[test]
+    fn rejects_token_names_that_are_paths() {
+        for name in ["", ".", "..", "../escape", "nested/name", r"nested\name"] {
+            let error = validate_token_name(name).unwrap_err();
+            assert!(error.contains("token name must be a single safe path component"));
+        }
+
+        validate_token_name("laptop token").unwrap();
+        validate_token_name("laptop-1").unwrap();
     }
 
     #[test]
