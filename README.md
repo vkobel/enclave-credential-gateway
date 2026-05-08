@@ -183,7 +183,7 @@ client sends gate_... phantom
     -> upstream receives only the real credential
 ```
 
-The TEE version will keep the same request model, but move the credential boundary into Intel TDX and expose public attestation. See [docs/TEE-SECURITY.md](./docs/TEE-SECURITY.md) for the target security model.
+The TEE version will keep the same request model, but move the credential boundary into Intel TDX and expose public attestation. See [spec/tee-security.md](./spec/tee-security.md) for the target security model.
 
 ---
 
@@ -204,5 +204,5 @@ cargo test --workspace
 - [spec/vision.md](./spec/vision.md) - product vision and long-term direction
 - [spec/roadmap.md](./spec/roadmap.md) - current status and next implementation milestones
 - [docs/USING.md](./docs/USING.md) - detailed per-tool setup for Claude Code, Codex, and `gh`
-- [docs/TEE-SECURITY.md](./docs/TEE-SECURITY.md) - target TEE security requirements and threat model
+- [spec/tee-security.md](./spec/tee-security.md) - target TEE security requirements and threat model
 - [profiles/README.md](./profiles/README.md) - route and tool profile format

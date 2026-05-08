@@ -19,7 +19,7 @@ profiles/
   tools/*.yaml    - Tool-specific activation adapters
 docs/
   USING.md        - Per-tool setup guide for the current implementation
-  TEE-SECURITY.md - Target TEE threat model and security requirements
+  tee-security.md - Target TEE threat model and security requirements
 spec/
   vision.md       - Product vision and long-term direction
   roadmap.md      - Current status and next implementation milestones
@@ -32,7 +32,7 @@ scripts/
 - **Understand the project:** read `spec/vision.md`.
 - **See current status and next work:** read `spec/roadmap.md`.
 - **Set up a tool:** read `docs/USING.md`.
-- **Review the TEE target:** read `docs/TEE-SECURITY.md`.
+- **Review the TEE target:** read `spec/tee-security.md`.
 - **Change route/tool profiles:** read `profiles/README.md`.
 
 ## Development Rules
