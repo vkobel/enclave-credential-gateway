@@ -159,9 +159,9 @@ minutes**, end to end:
    readable inside the TEE.
 4. **Mint phantoms per client.**
    ```
-   gate admin token create --name laptop-claude-code --routes anthropic,github
-   gate admin token create --name ci-runner          --routes openai,anthropic,github  --expires 30d
-   gate admin token create --name phone-shortcut     --routes telegram
+   gate admin token create --name laptop-claude-code --scope anthropic,github
+   gate admin token create --name ci-runner          --scope openai,anthropic,github
+   gate admin token create --name phone-shortcut     --scope telegram
    ```
 5. **Use them.** Each agent points at the gateway URL with its phantom in
    place of the real key. Existing SDKs work with no code changes (the
@@ -179,7 +179,7 @@ minutes**, end to end:
 - Route profile schema with route-owned aliases and prefix-based credential sources.
 - Shipped profiles: **OpenAI, Anthropic, GitHub**.
 - Caddy TLS termination and `GET /health`.
-- `gate` CLI: `activate`, `token {create|revoke|ls}`, and `git-credential`.
+- `gate` CLI: `activate`, `admin token {create|revoke|ls}`, and `git-credential`.
 
 ### Still required for v1
 
@@ -281,15 +281,19 @@ adapters. Option B (`CONNECT` proxy mode) is future work.
 
 Anchored on what's actually in the repo today.
 
-**Phase 1c - done.**
+**Phase 1a - done.**
+Phantom token authentication, current route matching, server-side credential
+injection, and shipped profiles for OpenAI, Anthropic, and GitHub.
+
+**Phase 1b - done.**
 Named token registry with admin API (`POST/GET/DELETE /admin/tokens`),
-scope enforcement, Blake3 hashing at rest. Shipped profiles for OpenAI,
-Anthropic, and GitHub. Caddy TLS. Local `gate` CLI with activation for
-Claude Code, Codex, and `gh`, plus `token {create|ls|revoke}` subcommands.
+scope enforcement, Blake3 hashing at rest. Caddy TLS. Local `gate` CLI with
+activation for Claude Code, Codex, and `gh`, plus `gate admin token`
+subcommands for gateway token administration.
 Backwards-compatible with
 single `GATE_PHANTOM_TOKEN` env var.
 
-**Phase 1b - next.**
+**Phase 1c - next.**
 `/attest` returns a verified non-debug TDX QuoteV4. GHCR image published.
 `DEPLOY.md` walks an operator from "I have a Phala account" to a working
 gateway in under 15 minutes. End-to-end demo: Claude Code + phantom token,

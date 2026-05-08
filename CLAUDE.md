@@ -19,10 +19,10 @@ profiles/
   tools/*.yaml    - Tool-specific activation adapters
 docs/
   USING.md        - Per-tool setup guide for the current implementation
-  tee-security.md - Target TEE threat model and security requirements
 spec/
   vision.md       - Product vision and long-term direction
   roadmap.md      - Current status and next implementation milestones
+  tee-security.md - Target TEE threat model and security requirements
 scripts/
   test-e2e.sh     - Docker-backed end-to-end test suite
 ```

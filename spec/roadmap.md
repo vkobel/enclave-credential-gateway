@@ -5,8 +5,8 @@
 | Phase | Description | Status |
 |---|---|---|
 | **1a** | Phantom token auth, profile routing, multi-source credential injection | done |
-| **1c** | Docker/Caddy deployment scaffold, token registry, CLI activation | done |
-| **1b** | TDX attestation, CI image publishing, reproducibility groundwork | next |
+| **1b** | Docker/Caddy deployment scaffold, token registry, CLI activation | done |
+| **1c** | TDX attestation, CI image publishing, reproducibility groundwork | next |
 | **2** | Audit log, token expiry, response redaction, additional route profiles | not started |
 | **3** | Sealed credential store, `gate verify`, deploy polish, v1 release | not started |
 
@@ -40,7 +40,7 @@
 
 ---
 
-## Phase 1b - TDX Attestation and Release Groundwork
+## Phase 1c - TDX Attestation and Release Groundwork
 
 **Goal:** make it possible for a verifier to ask the running gateway what code it is running, then compare that answer to published release artifacts.
 
@@ -84,10 +84,11 @@ Acceptance: a deployed gateway exposes `/attest`, a non-debug quote can be retri
 ## Dependency Order
 
 ```text
-1a + 1c (working proxy and CLI)
-  -> 1b (attestation and release artifacts)
-      -> 2 (policy, audit, more routes)
-          -> 3 (sealed credentials, verify, v1 release)
+1a (working proxy foundation)
+  -> 1b (registry, CLI activation, Docker/Caddy scaffold)
+      -> 1c (attestation and release artifacts)
+          -> 2 (policy, audit, more routes)
+              -> 3 (sealed credentials, verify, v1 release)
 ```
 
 ---
