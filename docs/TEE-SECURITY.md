@@ -1,151 +1,148 @@
-# CoCo Gateway — TEE Security
+# CoCo Gateway - TEE Security Target
 
-> Platform: Phala Cloud TDX CVM (v1 target).
+> Platform target: Phala Cloud TDX CVM.
 > Framework: [KRAB](https://github.com/vkobel/coco-krab-framework) for scoring attestation, reproducibility, session binding, and key release.
+
+This document describes the target TEE security profile for v1. It is not a claim that the current repository already provides these guarantees.
+
+## Current Implementation Status
+
+Working today:
+
+- Path-based gateway/proxy with OpenAI, Anthropic, and GitHub route profiles.
+- Phantom token registry stored as Blake3 token hashes in `tokens.json`.
+- Per-token scope enforcement before credential resolution.
+- Admin API protected by `COCO_ADMIN_TOKEN`, compared constant-time in memory.
+- Docker Compose + Caddy deployment scaffold.
+
+Not implemented yet:
+
+- `GET /attest` and client-side quote verification.
+- Pinned reproducible release pipeline and MRTD publication.
+- Sealed or encrypted credential store.
+- Phala KMS key release integration.
+- Audit log, credential redaction, and token expiry.
 
 ---
 
-## KRAB Target Vector
+## Target KRAB Vector
 
-```
+```text
 A2[Phala TDX] | R[f0/o1/l4/a4] | B2 | K3
 ```
 
-| Dimension | Score | Meaning |
+| Dimension | Target score | Meaning |
 |---|---|---|
-| **A — Attestation** | `A2[Phala TDX]` | Silicon-rooted TDX quote. Phala's dstack paravisor sits in the launch TCB — a conscious trust delegation to Phala. |
-| **R — Reproducibility** | `R[f0/o1/l4/a4]` | Firmware opaque (CSP-controlled `f0`); dstack OS source-available but not yet independently reproducible (`o1`); base Docker image pinned by SHA256 digest (`l4`); gateway binary reproducible from locked toolchain (`a4`). |
-| **B — Session Binding** | `B2` | `GET /attest?nonce=<hex>` hashes the caller nonce into `reportData`. `coco verify` checks the nonce and enforces a 5-minute quote TTL. Replay of a prior quote to a different session is structurally prevented. |
-| **K — Key Release** | `K3` | Phala KMS releases the sealing key only to a CVM whose MRTD matches the registered value. Debug-mode quotes are rejected. |
+| **A - Attestation** | `A2[Phala TDX]` | Silicon-rooted TDX quote. Phala's dstack paravisor sits in the launch TCB, which is a conscious trust delegation to Phala. |
+| **R - Reproducibility** | `R[f0/o1/l4/a4]` | Firmware opaque (`f0`); dstack OS source-available but not independently reproducible (`o1`); base image pinned by SHA256 digest (`l4`); gateway binary reproducible from a locked toolchain (`a4`). |
+| **B - Session Binding** | `B2` | `GET /attest?nonce=<hex>` hashes the caller nonce into `reportData`; `coco verify` checks nonce match and quote freshness. |
+| **K - Key Release** | `K3` | Phala KMS releases the sealing key only to a CVM whose measurement matches the registered value. |
 
-**Status:** `GET /attest` and the attestation verification flow are Phase 1b (not yet implemented). The proxy and token registry work today. See [spec/roadmap.md](../spec/roadmap.md).
-
-This is a **conscious trust delegation** to Phala at the A and K layers — not a structural weakness. Each gap is documented here, not hidden.
-
-**Post-v1 target:** `A2[Phala TDX] | R[f0/o2/l4/a4] | B2 | K4` — upgrade `o` when dstack OS becomes maintainer-signed; upgrade `K` to K4 when secret injection is owner-direct (see below).
+Post-v1 target: `A2[Phala TDX] | R[f0/o2/l4/a4] | B2 | K4`, with stronger dstack provenance and owner-direct credential injection.
 
 ---
 
 ## Threat Model
 
-**What the TEE boundary defends against:**
+The target TEE boundary is designed to defend against:
 
-- Phala operator or infrastructure admin reading credentials stored in the CVM. ✅ Plaintext keys never exist outside enclave memory.
-- User accidentally exposing credentials via `cat`, logs, or shell history. ✅ Keys are sealed inside the TEE; the CLI transmits them over the admin API and they are encrypted immediately.
-- Compromised agent process reading credentials from the host environment. ✅ Agents hold only phantom tokens; the real credential is never in agent process space.
-- Prompt injection causing an agent to exfiltrate credential values. ✅ Structural prevention — credentials are never in agent memory.
-- Supply chain attack substituting a backdoored binary. ✅ Mitigated by reproducible builds: an independent verifier can rebuild and compare MRTD.
+- Infrastructure operators reading real credentials from gateway memory or storage.
+- Agent processes reading real vendor keys from their own host environment.
+- Prompt injection that asks an agent to reveal a key it never had.
+- Supply-chain substitution of the gateway binary, once releases are reproducible and attested.
 
-**What this does NOT defend against:**
+It does not defend against:
 
-- A malicious agent making calls that are within its phantom's scope (by design).
-- Phala serving a modified dstack paravisor (A2 trust delegation — accepted consciously).
-- Side-channel attacks (TDX mitigations exist but are not a CoCo concern).
-- Post-boot env var injection (see Measurement Gap section).
+- A malicious agent making authorized calls within its phantom token scope.
+- Phala serving a modified dstack paravisor, which is the accepted A2 trust delegation.
+- TDX side channels.
+- Runtime input attacks that occur after measurement, unless those inputs are separately validated or attested.
+
+Current implementation note: today the gateway reduces credential exposure to clients and agents, but it does not yet protect credentials from the host or infrastructure operator because the TEE deployment and sealed storage pieces are not implemented.
 
 ---
 
 ## Security Requirements
 
-### R1 — TDX Attestation Endpoint
+### R1 - TDX Attestation Endpoint
 
-`GET /attest` must return a valid Intel TDX QuoteV4 from the tappd sidecar:
-- Caller supplies `?nonce=<hex>`; gateway hashes it into `reportData` (first 32 bytes = `SHA256(nonce)`).
-- If `td_attributes` bit 0 is set (debug mode): log `ERROR`, include `"debug": true` in response.
-- Return `503` when tappd is unreachable; other routes continue working.
-- Endpoint is unauthenticated — it is the public proof surface.
+`GET /attest` should return a valid Intel TDX QuoteV4 from the tappd sidecar:
 
-### R2 — Reproducible Binary
+- Caller supplies `?nonce=<hex>`; gateway hashes it into `reportData`.
+- If `td_attributes` bit 0 is set, the gateway logs an error and returns `"debug": true`.
+- If tappd is unreachable, `/attest` returns `503`; proxy routes continue serving.
+- The endpoint is unauthenticated because it is the public proof surface.
 
-Any independent party must be able to rebuild the `coco-gateway` binary and arrive at the same MRTD:
-- Rust toolchain pinned in `rust-toolchain.toml` (exact version, not `stable`).
-- Docker base image pinned by SHA256 digest — no floating tags.
-- `Cargo.lock` committed; CI uses `cargo build --locked`.
-- GitHub Actions workflow builds and pushes to GHCR on every push to `main`.
-- Each release publishes the Docker image digest and the derived MRTD.
-- `scripts/reproduce.sh`: given a git commit SHA, builds the image locally and prints the MRTD for comparison.
+### R2 - Reproducible Release Pipeline
 
-### R3 — Sealed Credential Storage (Phase 3)
+The v1 release process should make the binary-to-source link independently checkable:
 
-Credentials will be encrypted at rest with AES-256-GCM. The encryption key is derived inside the TEE via Phala's KMS (key released only to a CVM with the correct MRTD). Stored at `/data/credentials.enc`; credential values never appear in API responses, logs, or audit entries.
+- Commit an exact Rust toolchain version.
+- Build with `cargo build --locked`.
+- Pin Docker base images by SHA256 digest.
+- Publish GHCR image digests and derived MRTD values.
+- Add a reproduction script that rebuilds a release image and prints comparable proof material.
 
-### R4 — Admin Token
+The current `Dockerfile` is a development/deployment scaffold, not yet the reproducible release pipeline described here.
 
-The admin token is set via `COCO_ADMIN_TOKEN` at deploy time. Its Blake3 hash is what the gateway stores and compares (constant-time) on every `/admin/*` request. The plaintext never persists beyond the shell environment.
+### R3 - Sealed Credential Storage
 
-### R5 — Client Attestation Verification (`coco verify`)
+The target credential store encrypts credentials at rest with a key released only to the expected TDX measurement. Credential values must never appear in API responses, logs, audit entries, or client config.
 
-`coco verify <gateway-url>` (Phase 3) performs:
-1. Generate a random nonce locally.
+Current implementation note: vendor credentials are read from environment variables and injected into upstream requests. There is no sealed credential store yet.
+
+### R4 - Admin Token
+
+Current behavior: `COCO_ADMIN_TOKEN` is supplied at deploy time, held in memory, and compared constant-time for `/admin/*` requests.
+
+Target hardening: store only a hash or sealed representation of the admin secret after startup, and include admin-token handling in the attested deployment story.
+
+### R5 - Client Verification
+
+`coco verify <gateway-url>` should:
+
+1. Generate a fresh nonce.
 2. Call `GET /attest?nonce=<hex>`.
 3. Verify the TDX QuoteV4 signature against Intel PCS.
-4. Assert `td_attributes` debug bit is unset.
-5. Verify `reportData` contains `SHA256(nonce)` — confirms the quote is fresh for this session.
-6. Check quote timestamp is within TTL (5 minutes).
-7. Compare MRTD to pinned value from `~/.config/coco/config.toml` or `--mrtd` flag.
-8. Print: MRTD, GHCR image digest, timestamp, pass/fail.
+4. Assert the debug bit is unset.
+5. Verify `reportData` binds the nonce.
+6. Enforce quote freshness.
+7. Compare MRTD to a pinned value or release artifact.
+8. Print a pass/fail summary with the binary reference.
 
-### R6 — Measurement Gap: Post-Boot Inputs
+### R6 - Measurement Gap: Post-Boot Inputs
 
-The binary is measured correctly, but runtime inputs (env vars, injected secrets) are not part of the MRTD. Specific risks:
+The TDX measurement does not automatically cover runtime environment variables, compose files, mounted volumes, or injected secrets. v1 should explicitly document and reduce this gap:
 
-- **Phala injects secrets as env vars.** If an attacker substitutes a malicious `COCO_ADMIN_TOKEN` at boot, they compromise the admin surface without touching the binary. Mitigation (v1): validate all env vars at startup; log the names (not values) of all vars consumed at boot.
-- **`docker-compose.yml` is not measured.** Only the image digest is part of the MRTD. A modified compose file could inject unexpected env vars. Mitigation (v1): pin the compose file SHA in `coco verify` output; document that users should compare the deployed compose file against the published version.
+- Validate expected env vars at startup and log consumed names, never values.
+- Pin release images and document deployment config used for the published MRTD.
+- Move credential bootstrap toward owner-direct attested injection after v1.
 
-**Post-v1 mitigation:** owner-direct attested credential injection — the credential owner's device verifies the enclave attestation, then ECDH-encrypts the credential to the enclave's freshly generated ephemeral public key (embedded in `reportData`). The credential transits directly into enclave memory, encrypted end-to-end. Phala's infrastructure is a dumb carrier; it never holds the plaintext. This upgrades K3 → K4 and eliminates the env-var measurement gap.
-
----
-
-## Reproducible Build Pipeline
-
-```
-Source (vkobel/coco-credential-gateway @ git SHA)
-    │
-    ▼
-rust-toolchain.toml  ← pinned exact version
-Cargo.lock           ← committed, all deps locked
-    │
-    ▼
-GitHub Actions (ubuntu-24.04, pinned runner image)
-    │  cargo build --locked --release --target x86_64-unknown-linux-musl
-    ▼
-static musl binary: coco-gateway
-    │
-    ▼
-Dockerfile  ← FROM distroless/static@sha256:<pinned>
-    │  COPY coco-gateway /app/coco-gateway
-    ▼
-Docker image  → pushed to GHCR with SHA256 digest
-    │
-    ▼
-Phala CVM launch  ← image digest registered with Phala KMS
-    │  dstack measures the image into MRTD at boot
-    ▼
-MRTD  → published in GitHub release notes
-    │
-    ▼
-coco verify  ← any independent party runs this
-```
-
-**Why musl?** No dynamic library dependency on the host OS. The binary's behavior is fully determined by its source and Rust toolchain version. glibc introduces an uncontrolled variable; musl removes it.
+Owner-direct injection means the credential owner's device verifies the enclave attestation, then encrypts the credential to an ephemeral public key bound into the enclave quote. That is the path from K3 to K4.
 
 ---
 
-## KRAB Scorecard
+## Target Build Pipeline
 
-| Dimension | Score | Justification |
-|---|---|---|
-| **A** | `A2[Phala TDX]` | TDX silicon root of trust. Phala's dstack paravisor in launch TCB — conscious delegation. |
-| **R** | `R[f0/o1/l4/a4]` | Firmware opaque (`f0`). dstack OS source-available, not reproducible yet (`o1`). Base image pinned by digest (`l4`). Gateway binary reproducible from locked toolchain (`a4`). |
-| **B** | `B2` | Nonce hashed into `reportData`; `coco verify` enforces TTL + nonce match. |
-| **K** | `K3` | Phala KMS gates key release on MRTD match. Debug quotes rejected. No session-level binding at KMS (that's K4, post-v1). |
+```text
+source commit
+    -> pinned Rust toolchain + Cargo.lock
+    -> locked release build
+    -> pinned Docker base image
+    -> GHCR image digest
+    -> Phala CVM launch
+    -> published MRTD
+    -> coco verify
+```
+
+The current repo has the source and Cargo lockfile pieces. The pinned toolchain, release workflow, reproduction script, and MRTD publication are roadmap work.
 
 ---
 
 ## References
 
 - [KRAB Framework](https://github.com/vkobel/coco-krab-framework)
-- [Intel TDX Documentation](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/documentation.html) — MRTD, RTMR register semantics
-- [Phala dstack](https://github.com/Phala-Network/dstack) — CVM runtime, tappd sidecar, secret injection
-- [Edgeless Systems — Reproducible Builds for Confidential Computing](https://www.edgeless.systems/blog/reproducible-builds-for-confidential-computing)
-- [Trail of Bits — WhatsApp Private Processing Audit](https://blog.trailofbits.com/2026/04/07/what-we-learned-about-tee-security-from-auditing-whatsapps-private-inference/) — post-boot env var injection as measurement gap
+- [Intel TDX Documentation](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/documentation.html)
+- [Phala dstack](https://github.com/Phala-Network/dstack)
+- [Edgeless Systems - Reproducible Builds for Confidential Computing](https://www.edgeless.systems/blog/reproducible-builds-for-confidential-computing)
+- [Trail of Bits - WhatsApp Private Processing Audit](https://blog.trailofbits.com/2026/04/07/what-we-learned-about-tee-security-from-auditing-whatsapps-private-inference/)

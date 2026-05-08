@@ -1,18 +1,22 @@
-# CoCo Credential Gateway — Vision
+# CoCo Credential Gateway - Vision
+
+> Status: this is the product vision and target architecture. The current repository has a working proxy, phantom token registry, and CLI activation flow. TDX attestation, sealed credential storage, audit logging, and several route profiles described here are roadmap work.
 
 ## What this is
 
-A personal, hardware-attested credential hub that you deploy once and every
-agent you run connects to. It holds every API key, bot token, and service
-credential you own — GitHub, Telegram, Stripe, OpenAI, Anthropic, anything
-that today lives in a `.env`, a config file, or a shell export. Your agents
-never receive those values. They receive **phantom tokens** — scoped,
-revocable identifiers that are worthless outside your gateway. The gateway
-validates the phantom, injects the real credential into the live HTTP
-request inside the hardware boundary, and forwards the result. The real key
-never leaves the enclave.
+The target is a personal, hardware-attested credential hub that you deploy
+once and every agent you run connects to. It holds API keys, bot tokens,
+and service credentials that today live in `.env` files, config files, or
+shell exports. Your agents never receive those values. They receive
+**phantom tokens** - scoped, revocable identifiers that are worthless
+outside your gateway.
 
-CoCo is to AI agents what a hardware password manager is to browsers —
+The working implementation already validates phantom tokens, checks route
+scope, injects real upstream credentials server-side, and forwards the
+result. The target TEE implementation moves that credential boundary inside
+Intel TDX so the real key never leaves the enclave.
+
+CoCo is meant to be to AI agents what a hardware password manager is to browsers -
 except the credentials never leave the device even to fill a form,
 because CoCo fills the form itself.
 
@@ -22,28 +26,29 @@ The core insight: **credentials are infrastructure, not agent state.**
 
 Local proxies (OneCLI, AgentSecrets) are a meaningful
 security step up from `.env` files. They protect credentials from the agent
-process. CoCo protects credentials from *everyone* — including the
-infrastructure operator. And unlike any local proxy, CoCo is a single
-network-accessible hub: one deployment, every agent.
+process. CoCo's target TEE architecture protects credentials from
+*everyone* - including the infrastructure operator. And unlike any local
+proxy, CoCo is a single network-accessible hub: one deployment, every
+agent.
 
-| | Local proxy | CoCo (TEE) |
+| | Local proxy | CoCo target |
 |---|---|---|
 | Agent can’t read the key | ✅ | ✅ |
-| Operator can’t read the key | ❌ host access = full access | ✅ enclave boundary |
+| Operator can’t read the key | ❌ host access = full access | target: enclave boundary |
 | Works from any device / CI | ❌ local only | ✅ network-accessible |
 | One change updates all agents | ❌ restart every proxy | ✅ gateway is the source of truth |
-| Cryptographically verifiable binary | ❌ | ✅ TDX attestation + MRTD |
-| Audit trail is tamper-resistant | ❌ process can lie | ✅ log produced inside attested binary |
+| Cryptographically verifiable binary | ❌ | target: TDX attestation + MRTD |
+| Audit trail is tamper-resistant | ❌ process can lie | target: log produced inside attested binary |
 
-A local proxy is a baby step. CoCo is the destination.
+A local proxy is a first step. CoCo is the destination.
 
-Technically: CoCo is a TEE-backed RFC 8693 Security Token Service. The
-phantom token is the `subject_token`; the TEE is the STS; the injected
-credential — or a short-lived derivative of it — is the output
-`access_token`. The credential participates in the live HTTP request inside
-a hardware boundary. This is closer to an HSM than to a vault: an HSM signs
-data on your behalf without exposing the key; CoCo authenticates HTTP
-requests on your behalf without exposing the credential.
+Technically, the target architecture is a TEE-backed RFC 8693 Security
+Token Service. The phantom token is the `subject_token`; the TEE is the
+STS; the injected credential, or a short-lived derivative of it, is the
+output `access_token`. The credential participates in the live HTTP request
+inside a hardware boundary. This is closer to an HSM than to a vault: an
+HSM signs data on your behalf without exposing the key; CoCo authenticates
+HTTP requests on your behalf without exposing the credential.
 
 ---
 
@@ -80,15 +85,15 @@ credential hub that is verifiably isolated — a place even *you* can’t
 accidentally `cat` — and that all your agents connect to instead of
 holding their own copies.
 
-(The enterprise story — mutual attestation, MDM-bound devices, signed
-receipts — is real and is the long-term commercial direction. It is
+(The enterprise story - mutual attestation, MDM-bound devices, signed
+receipts - is real and is the long-term commercial direction. It is
 deliberately out of scope for v1. See the roadmap.)
 
 ---
 
-## The v1 promise
+## The v1 Promise
 
-> *Deploy once. Add every credential once — LLM keys, GitHub tokens,
+> *Deploy once. Add every credential once - LLM keys, GitHub tokens,
 > Telegram bots, all of it. Mint a phantom per agent. Point every agent
 > at the gateway. One credential change propagates everywhere instantly.
 > Watch the audit log to see who called what and when. Revoke any agent
@@ -115,19 +120,19 @@ Agents stop holding credentials. They hold phantoms.
 ```
   TODAY
   ─────
-  claude-code (laptop)      → OPENAI_KEY from ~/.env
-  ci-runner                 → OPENAI_KEY from GitHub Secrets
-  telegram-bot (VPS)        → TELEGRAM_TOKEN from /etc/systemd/…
-  n8n workflow              → GITHUB_TOKEN from n8n credential store
-  → 4 locations. Key rotated once = 3 missed. Zero audit trail.
+  claude-code (laptop)      -> OPENAI_KEY from ~/.env
+  ci-runner                 -> OPENAI_KEY from GitHub Secrets
+  telegram-bot (VPS)        -> TELEGRAM_TOKEN from /etc/systemd/...
+  n8n workflow              -> GITHUB_TOKEN from n8n credential store
+  -> 4 locations. Key rotated once = 3 missed. Zero audit trail.
 
   WITH COCO
   ─────────
-  claude-code (laptop)   phantom ccgw_a1…  ─┐
-  ci-runner              phantom ccgw_b2…  ─┤
-  telegram-bot (VPS)     phantom ccgw_c3…  ─┼─▶  CoCo TEE gateway  ─▶  upstream APIs
-  n8n workflow           phantom ccgw_d4…  ─┘
-  → 1 location. Key rotated once = propagates immediately to all agents.
+  claude-code (laptop)   phantom ccgw_a1...  ─┐
+  ci-runner              phantom ccgw_b2...  ─┤
+  telegram-bot (VPS)     phantom ccgw_c3...  ─┼─▶  CoCo TEE gateway  ─▶  upstream APIs
+  n8n workflow           phantom ccgw_d4...  ─┘
+  -> 1 location. Key rotated once = propagates immediately to all agents.
     Full per-agent audit trail.
 ```
 
@@ -136,7 +141,7 @@ gateway. Rotation is a single command.
 
 ---
 
-## v1 — definition of done
+## v1 Definition of Done
 
 A user with no Rust knowledge can complete this flow in **under 30
 minutes**, end to end:
@@ -147,8 +152,8 @@ minutes**, end to end:
 2. **Verify the binary.** `coco verify <gateway-url>` fetches `GET /attest`,
    checks the TDX QuoteV4 against Intel's PCS, asserts no debug bit, and
    prints the `MRTD` so the user can pin it.
-3. **Add real credentials.** `coco creds add openai sk-…` and
-   `coco creds add anthropic sk-ant-…`. Stored encrypted at rest, only
+3. **Add real credentials.** `coco creds add openai sk-...` and
+   `coco creds add anthropic sk-ant-...`. Stored encrypted at rest, only
    readable inside the TEE.
 4. **Mint phantoms per client.**
    ```
@@ -164,22 +169,27 @@ minutes**, end to end:
 7. **Revoke.** `coco token revoke laptop-claude-code` cuts that phantom in
    under a second. The other phantoms keep working.
 
-### What's in v1
+### Working in the repo today
 
-- ✅ Constant-time phantom validation, multi-source credential injection (`coco-gateway`).
-- ✅ Named token registry (blake3 hashed, atomic persistence). Admin API: `POST/GET/DELETE /admin/tokens`.
-- ✅ Scope enforcement: per-token route allowlist, 403 before credential resolution.
-- ✅ Route profile schema: `inject_mode` ∈ {`header`, `url_path`}, route-owned `aliases`, and prefix-based `credential_sources`.
-- ✅ Curated profiles: **OpenAI, Anthropic, GitHub, Groq, ElevenLabs, Ollama, Telegram, Together**.
-- ✅ Caddy TLS termination. `GET /health` endpoint.
-- ✅ `coco` CLI: `env` (shell activation), `token {create|revoke|ls}`.
-- TDX CVM deployment (Phase 1b, next).
-- `GET /attest` returning verified non-debug TDX QuoteV4.
-- Encrypted credential store inside the TEE (sealed by Phala secret injection or a key derived inside the enclave).
-- Per-token policy: per-route `endpoint_rules` (method + path), hard expiry.
-- Append-only structured audit log, queryable via admin API, optionally streamed to a file or S3.
+- Constant-time phantom validation and server-side credential injection (`coco-gateway`).
+- Named token registry with Blake3-hashed tokens. Admin API: `POST/GET/DELETE /admin/tokens`.
+- Scope enforcement: per-token route allowlist, 403 before credential resolution.
+- Route profile schema with route-owned aliases and prefix-based credential sources.
+- Shipped profiles: **OpenAI, Anthropic, GitHub**.
+- Caddy TLS termination and `GET /health`.
+- `coco` CLI: `activate`, `token {create|revoke|ls}`, and `git-credential`.
+
+### Still required for v1
+
+- TDX CVM deployment.
+- `GET /attest` returning a non-debug TDX QuoteV4.
+- Reproducible release artifacts and MRTD publication.
+- Encrypted credential store inside the TEE.
+- Per-token hard expiry and finer endpoint policy.
+- Append-only structured audit log.
+- Additional route profiles: Groq, ElevenLabs, Ollama, Telegram, Together.
 - `coco` CLI: `deploy`, `verify`, `creds {add|rotate|rm|ls}`, `audit {tail|grep}`.
-- One-page `DEPLOY.md` and `USING.md`.
+- One-page `DEPLOY.md`.
 
 ### What is explicitly NOT in v1
 
@@ -195,7 +205,7 @@ minutes**, end to end:
 
 ---
 
-## Architecture (v1)
+## Target Architecture (v1)
 
 ```
  ┌──────────────────────────────────────────────┐
@@ -216,10 +226,10 @@ minutes**, end to end:
            │  coco-gateway                      │
            │  ├─ phantom registry (enc)         │
            │  ├─ credential store  (enc)        │
-           │  │    openai    → sk-proj-…        │
-           │  │    github    → ghp_…            │
-           │  │    telegram  → 7312…:AAH…       │
-           │  │    stripe    → sk_live_…        │
+           │  │    openai    -> sk-proj-...     │
+           │  │    github    -> ghp_...         │
+           │  │    telegram  -> 7312...:AAH...  │
+           │  │    stripe    -> sk_live_...     │
            │  ├─ per-token policy               │
            │  ├─ audit log                      │
            │  └─ GET /attest  (TDX QuoteV4)     │
@@ -230,67 +240,65 @@ minutes**, end to end:
          api.openai   api.github  api.telegram
 ```
 
-Every agent connects to the same gateway with a different phantom.
-Credentials live in one place. Rotation propagates immediately to all agents.
-The CLI is the only management surface. Real keys exist only inside the enclave.
+In the target v1 architecture, every agent connects to the same gateway
+with a different phantom. Credentials live in one place. Rotation
+propagates immediately to all agents. The CLI is the only management
+surface. Real keys exist only inside the enclave.
 
 ## How agents connect
 
 Two integration modes. The right choice depends on what the agent framework exposes:
 
-**Option A — Base URL rewrite** (LLM APIs and any SDK with a configurable base URL)
+**Option A - Base URL rewrite** (LLM APIs and any SDK with a configurable base URL)
 
-Change `base_url` to point at the gateway. No code changes — the phantom
+Change `base_url` to point at the gateway. No code changes - the phantom
 goes in the same `Authorization` header the SDK already sends.
 
 ```bash
 # OpenAI Python SDK
-client = OpenAI(base_url="https://gw.example/openai", api_key="ccgw_a1…")
+client = OpenAI(base_url="https://gw.example/openai", api_key="ccgw_a1...")
 
 # Claude Code
-ANTHROPIC_BASE_URL=https://gw.example/anthropic ANTHROPIC_API_KEY=ccgw_a1… claude
+ANTHROPIC_BASE_URL=https://gw.example/anthropic ANTHROPIC_API_KEY=ccgw_a1... claude
 ```
 
-**Option B — `HTTPS_PROXY`** (any HTTP tool with no configurable base URL: `gh`, Telegram SDK, curl, shell scripts, n8n HTTP nodes)
+**Option B - `HTTPS_PROXY`** (future proxy mode for HTTP tools with no configurable base URL)
 
 ```bash
-export HTTPS_PROXY=https://ccgw_a1…@gw.example
-# Every subsequent HTTP call — gh, curl, the Telegram library, anything — goes through CoCo.
+export HTTPS_PROXY=https://ccgw_a1...@gw.example
+# Every subsequent HTTP call goes through CoCo.
 # The gateway strips the phantom from proxy credentials and injects the real credential.
 ```
 
-Option A ships in v1. Option B (`CONNECT` proxy mode) is the first v1.x
-priority: it unlocks the non-LLM tool case (`gh`, Telegram, etc.) with
-zero per-agent configuration and is the natural path for agents that
-don’t expose a base URL setting.
+Option A is the current integration path for shipped LLM routes and tool
+adapters. Option B (`CONNECT` proxy mode) is future work.
 
 ---
 
-## The 4-week path to v1
+## The Path to v1
 
 Anchored on what's actually in the repo today.
 
-**Phase 1c — done.**
+**Phase 1c - done.**
 Named token registry with admin API (`POST/GET/DELETE /admin/tokens`),
-scope enforcement, blake3 hashing at rest. Profile library for 8 services
-(OpenAI, Anthropic, GitHub, Groq, ElevenLabs, Ollama, Telegram, Together).
-Inject modes: header and url_path (Telegram). Caddy TLS. Local
-`coco` CLI with `env` (shell activation for Claude Code, Codex, gh, Ollama)
-and `token {create|ls|revoke}` subcommands. Backwards-compatible with
+scope enforcement, Blake3 hashing at rest. Shipped profiles for OpenAI,
+Anthropic, and GitHub. Caddy TLS. Local `coco` CLI with activation for
+Claude Code, Codex, and `gh`, plus `token {create|ls|revoke}` subcommands.
+Backwards-compatible with
 single `COCO_PHANTOM_TOKEN` env var.
 
-**Phase 1b — next.**
+**Phase 1b - next.**
 `/attest` returns a verified non-debug TDX QuoteV4. GHCR image published.
 `DEPLOY.md` walks an operator from "I have a Phala account" to a working
 gateway in under 15 minutes. End-to-end demo: Claude Code + phantom token,
-real key never on the laptop.
+real key never on the client host.
 
-**Phase 2 — Policy + audit log + non-LLM tool profiles.**
+**Phase 2 - Policy + audit log + more profiles.**
 Per-token route allowlist, per-route `endpoint_rules` (method + path), hard expiry.
 Append-only audit log to an encrypted on-disk volume, plus optional S3 sink.
-`coco audit tail` and `coco audit grep`.
+`coco audit tail`, `coco audit grep`, and additional route profiles.
 
-**Phase 3 — Polish.**
+**Phase 3 - Polish.**
 `coco deploy phala` one-shot deploy helper. `coco verify` for attestation.
 `coco creds {add|rotate|rm|ls}` against a sealed credential store.
 `USING.md` with copy-paste recipes for Claude Code, OpenAI Python SDK,
@@ -306,19 +314,19 @@ flow from a fresh machine.
 Each step is a direction, not a commitment. Each is justified by what v1
 *didn't* solve.
 
-**v1.x — delight & ergonomics.**
+**v1.x - delight & ergonomics.**
 - **Mobile provisioning via passkey.** A small companion mobile app where
   the operator pastes a real upstream key once, signs an envelope with a
   passkey (WebAuthn), and the envelope is encrypted to the TEE's attested
   public key. The plaintext never touches a laptop or CLI. This is the
   right experience for first-time credential entry; we will not ship
-  hand-wavy crypto for it.
+  under-specified crypto for it.
 - **Minimal admin web UI** for non-CLI users.
 - **Route presets beyond the v1 set** (Cloudflare, Stripe, Pushover,
   AWS SigV4, Google OAuth, …). v1 ships a compiled built-in route
   manifest; additional route extension needs an explicit design.
 
-**v2 — small teams.**
+**v2 - small teams.**
 - Multi-operator: more than one admin, role separation (admin / read-only /
   audit).
 - Per-operator API tokens replacing the single admin token.
@@ -326,7 +334,7 @@ Each step is a direction, not a commitment. Each is justified by what v1
 - Hosted "CoCo Cloud" option for users who don't want to run a CVM
   themselves.
 
-**v3 — enterprise / regulated.**
+**v3 - enterprise / regulated.**
 - Mutual attestation. A hardened local companion (Secure-Enclave-backed
   client identity) that authenticates the device to the gateway, with the
   gateway's `MRTD` pinned in the companion's signed config.
@@ -348,9 +356,9 @@ the references for v3.
 - **First-time credential entry UX.** Today the operator pastes real keys
   into a CLI. The passkey/mobile envelope flow above is the target;
   envelope format, recovery path, and rotation still need design.
-- **Sealed credential storage at rest.** v1 ships with credentials sealed
-  by Phala's secret injection (the simple path). A portable, substrate-
-  agnostic vault format is a v2 item.
+- **Sealed credential storage at rest.** The target v1 path is credentials
+  sealed by Phala's secret injection or an enclave-derived key. A portable,
+  substrate-agnostic vault format is a v2 item.
 - **Audit-log integrity.** v1 logs are append-only on an encrypted volume.
   Hash-chained, tamper-evident logs (and signed receipts) are v3.
 

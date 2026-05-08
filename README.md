@@ -1,45 +1,47 @@
 # CoCo Credential Gateway
 
-CoCo is a TEE-backed credential gateway for AI agents. Instead of giving agents real API keys, you give them **phantom tokens** (`ccgw_...`). The gateway validates the phantom inside a hardware trust boundary, injects the real credential into the live HTTP request, and forwards it upstream. The real key never leaves the enclave.
+CoCo is early work toward a TEE-backed credential gateway for AI agents. The working gateway already lets clients use scoped phantom tokens (`ccgw_...`) instead of real vendor keys; the next milestone is moving the trust boundary into Intel TDX with attestation and reproducible release artifacts.
 
-**The core insight: credentials are infrastructure, not agent state.**
+**Core idea:** credentials should be infrastructure, not agent state.
 
 ---
 
-## Why CoCo
+## Vision
 
-Every AI tool you run today holds your real API keys: in `.env` files, shell exports, CI secrets, config files scattered across machines. You have no audit trail, no revocation, and rotating one leaked key means finding it in seven places.
+AI tools routinely hold real API keys in `.env` files, shell exports, CI secrets, and local config. That makes credentials easy to leak, hard to rotate, and difficult to audit.
 
-|  | Local proxy | CoCo (TEE) |
+CoCo's target architecture is a network gateway running inside a hardware trust boundary. Agents receive revocable phantom tokens. The gateway validates the phantom, checks route scope, injects the real upstream credential server-side, and forwards the request. In the TEE-backed version, the infrastructure operator should be able to verify the binary without being able to read the real credentials.
+
+| Capability | Local proxy | CoCo target |
 |---|---|---|
-| Agent can't read the key | ✅ | ✅ |
-| Operator can't read the key | ❌ host access = full access | ✅ hardware enclave boundary |
-| Works from any device or CI | ❌ local only | ✅ network-accessible |
-| One credential change updates all agents | ❌ restart every proxy | ✅ gateway is the source of truth |
-| Cryptographically verifiable binary | ❌ | ✅ TDX attestation + MRTD |
-
-A local proxy protects credentials from the agent process. CoCo protects them from everyone — including the infrastructure operator — because the real key exists only inside a hardware enclave (Intel TDX). The enclave is measured at boot; any independent party can verify that the published source code is what's actually running.
-
-CoCo is to AI agents what a hardware password manager is to browsers — except the credentials never leave the device even to fill a form, because CoCo fills the form itself.
+| Agent cannot read the real key | yes | yes |
+| Central revocation and rotation | limited | yes |
+| Works from other devices or CI | no | yes |
+| Operator cannot read the real key | no | target: TDX boundary |
+| Verifiable running binary | no | target: attestation + MRTD |
 
 ---
 
-## Current State
+## Working Today
 
-Phases **1a** and **1c** are complete. The remote proxy and CLI work today:
+This repo is an early work in progress. The proxy, token registry, and CLI are usable locally and through Docker Compose:
 
-- **Phantom token registry** — named tokens, Blake3-hashed at rest, admin API (`POST/GET/DELETE /admin/tokens`), scope enforcement per token
-- **Route profiles** — OpenAI, Anthropic, GitHub, Groq, ElevenLabs, Telegram, Together, Ollama; credential injection in headers or URL path
-- **CLI** — `coco token create/revoke/ls`, shell activation for Claude Code, Codex, `gh`
-- **Deployment** — Docker Compose + Caddy TLS; `COCO_DOMAIN` for a real hostname + Let's Encrypt
+- **Gateway/proxy** - Axum HTTP gateway with route matching, auth middleware, credential stripping, and upstream credential injection.
+- **Phantom token registry** - named tokens, Blake3-hashed at rest, persisted to `tokens.json`, with per-token route scope enforcement.
+- **Admin API** - `POST /admin/tokens`, `GET /admin/tokens`, `DELETE /admin/tokens/:id`, protected by `COCO_ADMIN_TOKEN`.
+- **CLI** - `coco token create/revoke/ls`, `coco activate`, and `coco git-credential`.
+- **Tool activation** - generated config/env for `gh`, Codex, and Claude Code.
+- **Deployment scaffold** - Docker Compose with Caddy TLS and optional `COCO_DOMAIN`.
 
-**Not yet implemented:** TDX attestation (`GET /attest`), encrypted credential store, audit log. See [spec/roadmap.md](./spec/roadmap.md) for what's next and why.
+**Not implemented yet:** TDX attestation (`GET /attest`), reproducible build/MRTD verification, sealed credential storage, audit log, token expiry, and additional route profiles beyond OpenAI, Anthropic, and GitHub.
+
+See [spec/roadmap.md](./spec/roadmap.md) for the implementation plan.
 
 ---
 
 ## Quick Start
 
-Prerequisites: Docker + Compose, Rust/Cargo (for the CLI), `gh`, `git`, `curl`, `jq`.
+Prerequisites: Docker + Compose, Rust/Cargo for the CLI, `gh`, `git`, `curl`, and `jq`.
 
 ### 1. Start the Gateway
 
@@ -53,7 +55,7 @@ docker compose up -d --build
 curl -k https://localhost/health
 ```
 
-`COCO_ADMIN_TOKEN` protects the admin API. `GITHUB_TOKEN` and other real keys are injected server-side; clients never receive them.
+`COCO_ADMIN_TOKEN` protects the admin API. Vendor keys are read by the gateway and injected server-side; clients receive only `ccgw_...` phantom tokens.
 
 ### 2. Trust Caddy's Local Certificate
 
@@ -61,24 +63,27 @@ curl -k https://localhost/health
 docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt /tmp/coco-caddy-root.crt
 ```
 
-**macOS:**
+macOS:
+
 ```bash
 sudo security add-trusted-cert -d -r trustRoot \
   -k /Library/Keychains/System.keychain /tmp/coco-caddy-root.crt
 ```
 
-**Debian/Ubuntu:**
+Debian/Ubuntu:
+
 ```bash
 sudo cp /tmp/coco-caddy-root.crt /usr/local/share/ca-certificates/coco-caddy-root.crt
 sudo update-ca-certificates
 ```
 
 Then verify without `-k`:
+
 ```bash
 curl https://localhost/health
 ```
 
-For a real hostname: set `COCO_DOMAIN=gw.example.com` before `docker compose up`. Caddy requests a public certificate automatically.
+For a real hostname, set `COCO_DOMAIN=gw.example.com` before `docker compose up`. Caddy will request a public certificate for that name.
 
 ### 3. Install the CLI
 
@@ -108,7 +113,7 @@ gh repo list
 gh repo clone OWNER/REPO
 ```
 
-Activation sets `GH_HOST`, `GH_ENTERPRISE_TOKEN`, and a generated Git credential helper. Git remotes stay token-free (`https://localhost/OWNER/REPO.git`).
+Activation sets `GH_HOST`, `GH_ENTERPRISE_TOKEN`, and a generated Git credential helper. Git remotes stay token-free, for example `https://localhost/OWNER/REPO.git`.
 
 ### Claude Code
 
@@ -126,9 +131,9 @@ coco activate codex-local --tool codex
 codex
 ```
 
-### Using an Existing Gateway
+### Existing Gateway
 
-If someone else runs the gateway, you only need the URL and a token:
+If someone else operates the gateway, you only need its URL and a phantom token:
 
 ```toml
 # ~/.config/coco/config.toml
@@ -147,7 +152,7 @@ coco activate laptop --tool gh
 
 ## Routes
 
-Built-in routes are in [`profiles/routes/`](./profiles/routes), tool adapters in [`profiles/tools/`](./profiles/tools), embedded at build time.
+Built-in routes are defined in [`profiles/routes/`](./profiles/routes) and embedded at build time. Tool adapters are defined in [`profiles/tools/`](./profiles/tools).
 
 | Path prefix | Scope | Upstream | Credential env |
 |---|---|---|---|
@@ -156,26 +161,25 @@ Built-in routes are in [`profiles/routes/`](./profiles/routes), tool adapters in
 | `/github/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` |
 | `/api/v3/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` (`gh` compatibility, strips `/v3`) |
 | `/<owner>/<repo>.git/...` | `github` | `https://github.com` | `GITHUB_TOKEN` (Git smart-HTTP) |
-| `/groq/...` | `groq` | `https://api.groq.com` | `GROQ_API_KEY` |
-| `/elevenlabs/...` | `elevenlabs` | `https://api.elevenlabs.io` | `ELEVENLABS_API_KEY` |
-| `/telegram/...` | `telegram` | `https://api.telegram.org` | `TELEGRAM_BOT_TOKEN` (URL-path injection) |
 
-Status codes: `407` = missing/invalid token · `403` = valid token, wrong scope · `404` = unknown route · `503` = real credential env var not set.
+Planned future profiles include Groq, ElevenLabs, Telegram, Together, and Ollama.
+
+Status codes: `407` = missing/invalid token, `403` = valid token with wrong scope, `404` = unknown route, `503` = required real credential env var is not set.
 
 ---
 
-## How It Works
+## How It Works Today
 
-```
+```text
 client sends ccgw_... phantom
-    → gateway validates token (constant-time Blake3 hash compare)
-    → gateway checks scope (403 before credential is even touched)
-    → gateway removes the phantom from the request
-    → gateway injects the real server-side credential
-    → upstream receives only the real credential
+    -> gateway validates token with a constant-time Blake3 hash comparison
+    -> gateway checks route scope before credential lookup
+    -> gateway removes the phantom credential from the request
+    -> gateway injects the real server-side credential
+    -> upstream receives only the real credential
 ```
 
-The credential injection happens inside a hardware boundary (Intel TDX, on Phala Cloud). The binary is reproducible: anyone can rebuild from source and verify the MRTD matches the running enclave. See [docs/TEE-SECURITY.md](./docs/TEE-SECURITY.md).
+The TEE version will keep the same request model, but move the credential boundary into Intel TDX and expose public attestation. See [docs/TEE-SECURITY.md](./docs/TEE-SECURITY.md) for the target security model.
 
 ---
 
@@ -187,14 +191,14 @@ cargo test --workspace
 ./scripts/test-e2e.sh
 ```
 
-`test-e2e.sh` exercises the full Docker flow: gateway startup, admin API, token validation, scope enforcement, revocation, CLI activation. Live upstream checks are skipped when credentials are not set.
+`test-e2e.sh` exercises the Docker flow: gateway startup, admin API, token validation, scope enforcement, revocation, and CLI activation. Live upstream checks are skipped when credentials are not set.
 
 ---
 
 ## Docs
 
-- [spec/vision.md](./spec/vision.md) — product vision and roadmap
-- [spec/roadmap.md](./spec/roadmap.md) — implementation phases and current status
-- [docs/USING.md](./docs/USING.md) — detailed per-tool setup (Claude Code, Codex, `gh`)
-- [docs/TEE-SECURITY.md](./docs/TEE-SECURITY.md) — TEE threat model and attestation design
-- [profiles/README.md](./profiles/README.md) — route and tool profile format
+- [spec/vision.md](./spec/vision.md) - product vision and long-term direction
+- [spec/roadmap.md](./spec/roadmap.md) - current status and next implementation milestones
+- [docs/USING.md](./docs/USING.md) - detailed per-tool setup for Claude Code, Codex, and `gh`
+- [docs/TEE-SECURITY.md](./docs/TEE-SECURITY.md) - target TEE security requirements and threat model
+- [profiles/README.md](./profiles/README.md) - route and tool profile format
