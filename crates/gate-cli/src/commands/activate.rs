@@ -39,14 +39,14 @@ pub fn run(
 }
 
 fn print_description(name: &str, activation: &Activation) {
-    println!("CoCo activation for token '{name}':");
+    println!("Enclave Credential Gateway activation for token '{name}':");
     for line in activation.describe_lines() {
         println!("  {line}");
     }
 }
 
 fn launch_subshell(name: &str, activation: &Activation) -> Result<()> {
-    println!("CoCo activated: {name}");
+    println!("Enclave Credential Gateway activated: {name}");
     if !activation.exports.is_empty() {
         println!("Exports:");
         for export in &activation.exports {

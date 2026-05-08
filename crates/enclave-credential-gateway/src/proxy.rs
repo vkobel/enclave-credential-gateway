@@ -344,7 +344,7 @@ mod tests {
             "authorization",
             HeaderValue::from_static("Bearer claude-ai"),
         );
-        headers.insert("x-api-key", HeaderValue::from_static("ccgw_test"));
+        headers.insert("x-api-key", HeaderValue::from_static("gate_test"));
         headers.insert("content-type", HeaderValue::from_static("application/json"));
 
         remove_client_credential_headers(
@@ -433,11 +433,11 @@ mod tests {
     #[test]
     fn anthropic_resolution_rejects_phantom_tokens_as_upstream_secrets() {
         let mut apikey = anthropic_source("x-api-key", None);
-        apikey.reject_prefixes = vec!["ccgw_".to_string()];
+        apikey.reject_prefixes = vec!["gate_".to_string()];
         let sources = [apikey];
 
         let resolved = resolve_credential_with(&sources, None, |env| match env {
-            "ANTHROPIC_API_KEY" => Some("ccgw_client_phantom".to_string()),
+            "ANTHROPIC_API_KEY" => Some("gate_client_phantom".to_string()),
             _ => None,
         });
 

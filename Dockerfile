@@ -1,4 +1,4 @@
-# Multi-stage build for coco-gateway
+# Multi-stage build for enclave-credential-gateway
 # Stage 1: cargo-chef — compute recipe for dependency caching
 FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
 WORKDIR /app
@@ -22,8 +22,8 @@ RUN cargo chef cook --release --recipe-path recipe.json
 
 # Stage 3: Build the binary
 COPY . .
-RUN cargo build --release -p coco-gateway && \
-    strip /app/target/release/coco-gateway
+RUN cargo build --release -p enclave-credential-gateway && \
+    strip /app/target/release/enclave-credential-gateway
 
 # Stage 4: Minimal runtime image
 FROM debian:trixie-slim AS runtime
@@ -32,8 +32,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libdbus-1-3 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/coco-gateway /usr/local/bin/coco-gateway
+COPY --from=builder /app/target/release/enclave-credential-gateway /usr/local/bin/enclave-credential-gateway
 
 EXPOSE 8080
 
-ENTRYPOINT ["/usr/local/bin/coco-gateway"]
+ENTRYPOINT ["/usr/local/bin/enclave-credential-gateway"]

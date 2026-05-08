@@ -9,7 +9,7 @@ mod test_support;
 mod tooling;
 
 #[derive(Parser)]
-#[command(name = "coco", about = "CoCo Credential Gateway CLI")]
+#[command(name = "gate", about = "Enclave Credential Gateway CLI")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -17,6 +17,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Manage gateway state through the admin API
+    Admin {
+        #[command(subcommand)]
+        action: AdminAction,
+    },
     /// Configure shell and tools for a token
     Activate {
         /// Token name from config [tokens] section
@@ -34,11 +39,6 @@ enum Commands {
         #[arg(long)]
         route: Option<String>,
     },
-    /// Manage gateway tokens
-    Token {
-        #[command(subcommand)]
-        action: TokenAction,
-    },
     /// Internal Git credential helper
     #[command(name = "git-credential", hide = true)]
     GitCredential {
@@ -50,8 +50,17 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
+enum AdminAction {
+    /// Manage gateway phantom tokens
+    Token {
+        #[command(subcommand)]
+        action: TokenAction,
+    },
+}
+
+#[derive(Subcommand)]
 enum TokenAction {
-    /// Create a new named token
+    /// Create a new named gateway token
     Create {
         /// Human-readable name for the token
         #[arg(long)]
@@ -63,9 +72,9 @@ enum TokenAction {
         #[arg(long)]
         all_routes: bool,
     },
-    /// List all tokens
+    /// List gateway tokens
     Ls,
-    /// Revoke a token by name
+    /// Revoke a gateway token by name
     Revoke {
         /// Token name to revoke
         name: String,
@@ -83,14 +92,16 @@ async fn main() -> anyhow::Result<()> {
             tool,
             route,
         } => commands::activate::run(&name, eval, describe, &tool, route.as_deref())?,
-        Commands::Token { action } => match action {
-            TokenAction::Create {
-                name,
-                scope,
-                all_routes,
-            } => commands::token::create(&name, &scope, all_routes).await?,
-            TokenAction::Ls => commands::token::list().await?,
-            TokenAction::Revoke { name } => commands::token::revoke(&name).await?,
+        Commands::Admin { action } => match action {
+            AdminAction::Token { action } => match action {
+                TokenAction::Create {
+                    name,
+                    scope,
+                    all_routes,
+                } => commands::token::create(&name, &scope, all_routes).await?,
+                TokenAction::Ls => commands::token::list().await?,
+                TokenAction::Revoke { name } => commands::token::revoke(&name).await?,
+            },
         },
         Commands::GitCredential { name, operation } => {
             commands::git_credential::run(&name, &operation)?

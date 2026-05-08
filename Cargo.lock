@@ -312,52 +312,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "coco-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "dirs",
- "reqwest",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "tokio",
- "toml",
-]
-
-[[package]]
-name = "coco-gateway"
-version = "0.1.0"
-dependencies = [
- "axum",
- "base64",
- "blake3",
- "chrono",
- "hex",
- "http-body-util",
- "hyper",
- "hyper-rustls",
- "hyper-util",
- "rand 0.8.6",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "serde_yaml",
- "subtle",
- "tempfile",
- "tokio",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "webpki-roots",
- "zeroize",
-]
-
-[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -441,6 +395,36 @@ name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
+
+[[package]]
+name = "enclave-credential-gateway"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64",
+ "blake3",
+ "chrono",
+ "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "rand 0.8.6",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "webpki-roots",
+ "zeroize",
+]
 
 [[package]]
 name = "encoding_rs"
@@ -558,6 +542,22 @@ dependencies = [
  "futures-task",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "gate-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dirs",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tokio",
+ "toml",
 ]
 
 [[package]]

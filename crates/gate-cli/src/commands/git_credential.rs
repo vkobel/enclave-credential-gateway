@@ -94,7 +94,7 @@ mod tests {
         tokens.insert(
             "laptop".to_string(),
             TokenEntry {
-                token: "ccgw_test".to_string(),
+                token: "gate_test".to_string(),
                 scope: scope.iter().map(|scope| scope.to_string()).collect(),
                 all_routes: false,
             },
@@ -120,7 +120,7 @@ mod tests {
 
         assert_eq!(
             response.as_deref(),
-            Some("username=x-access-token\npassword=ccgw_test\n\n")
+            Some("username=x-access-token\npassword=gate_test\n\n")
         );
     }
 

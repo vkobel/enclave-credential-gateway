@@ -9,7 +9,7 @@ thread_local! {
 
 pub fn with_temp_config_root<T>(f: impl FnOnce(&TempDir) -> T) -> T {
     let temp = TempDir::new().unwrap();
-    let _config = OverrideRestore::set_config_root(temp.path().join(".config/coco"));
+    let _config = OverrideRestore::set_config_root(temp.path().join(".config/gate"));
     let _home = OverrideRestore::set_home_dir(temp.path().to_path_buf());
 
     f(&temp)

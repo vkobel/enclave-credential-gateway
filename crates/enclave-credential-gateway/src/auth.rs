@@ -221,7 +221,7 @@ pub async fn auth_middleware(
         }
     }
 
-    // 2. Fallback to COCO_PHANTOM_TOKEN
+    // 2. Fallback to GATE_PHANTOM_TOKEN
     if let Some(ref phantom) = state.phantom_token {
         if let Some(auth) = find_phantom_auth(&req, phantom, sources) {
             info!("{} {} — auth ok (phantom token)", method, path);
@@ -241,7 +241,7 @@ pub async fn auth_middleware(
             StatusCode::UNAUTHORIZED,
             [(
                 axum::http::header::WWW_AUTHENTICATE,
-                axum::http::HeaderValue::from_static(r#"Basic realm="coco-gateway""#),
+                axum::http::HeaderValue::from_static(r#"Basic realm="enclave-credential-gateway""#),
             )],
             "401 Unauthorized",
         )

@@ -82,7 +82,7 @@ impl TokenRegistry {
 
         let mut raw = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut raw);
-        let token_value = format!("ccgw_{}", hex::encode(raw));
+        let token_value = format!("gate_{}", hex::encode(raw));
         let hash = hex::encode(blake3::hash(token_value.as_bytes()).as_bytes());
 
         let record = TokenRecord {

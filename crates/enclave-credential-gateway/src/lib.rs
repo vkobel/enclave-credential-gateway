@@ -1,4 +1,4 @@
-//! Shared logic for coco-gateway — exported for integration tests.
+//! Shared logic for enclave-credential-gateway — exported for integration tests.
 
 pub mod admin;
 pub mod auth;
