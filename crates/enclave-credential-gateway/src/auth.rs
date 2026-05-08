@@ -209,24 +209,57 @@ pub async fn auth_middleware(
                 .expect("registry auth includes token record");
             if !record.allows_route(canonical) {
                 warn!(
-                    "{} {} — 403 token '{}' not scoped for route '{}'",
-                    method, path, record.name, canonical
+                    method = %method,
+                    path = %path,
+                    canonical_route = canonical,
+                    auth = "registry",
+                    token = %record.name,
+                    result = "denied",
+                    "auth denied: token not scoped for route"
                 );
                 return (StatusCode::FORBIDDEN, "403 Forbidden — token scope denied")
                     .into_response();
             }
-            info!("{} {} — auth ok (token: '{}')", method, path, record.name);
+            info!(
+                method = %method,
+                path = %path,
+                canonical_route = canonical,
+                auth = "registry",
+                token = %record.name,
+                result = "ok",
+                "auth ok"
+            );
             req.extensions_mut().insert(auth);
             return next.run(req).await;
         }
     }
 
-    // 2. Fallback to GATE_PHANTOM_TOKEN
+    // 2. Fallback to GATE_PHANTOM_TOKEN (unrestricted — all known routes allowed).
+    //    Reject immediately if the path does not resolve to a known route; the
+    //    phantom token must not grant access to arbitrary unrouted paths.
     if let Some(ref phantom) = state.phantom_token {
         if let Some(auth) = find_phantom_auth(&req, phantom, sources) {
-            info!("{} {} — auth ok (phantom token)", method, path);
-            req.extensions_mut().insert(auth);
-            return next.run(req).await;
+            if resolved.is_none() {
+                warn!(
+                    method = %method,
+                    path = %path,
+                    auth = "phantom",
+                    result = "denied",
+                    "auth denied: phantom token presented for unknown route"
+                );
+                // fall through to 407
+            } else {
+                warn!(
+                    method = %method,
+                    path = %path,
+                    canonical_route = canonical,
+                    auth = "phantom",
+                    result = "ok",
+                    "auth ok: phantom token is unrestricted — prefer registry tokens"
+                );
+                req.extensions_mut().insert(auth);
+                return next.run(req).await;
+            }
         }
     }
 
@@ -234,8 +267,10 @@ pub async fn auth_middleware(
     // 407 is treated as a proxy error and git does not retry with credentials.
     if crate::profile::is_git_smart_http(&path) {
         warn!(
-            "{} {} — 401 missing or invalid token (git smart-HTTP)",
-            method, path
+            method = %method,
+            path = %path,
+            result = "unauthenticated",
+            "auth denied: missing or invalid token (git smart-HTTP)"
         );
         return (
             StatusCode::UNAUTHORIZED,
@@ -248,7 +283,12 @@ pub async fn auth_middleware(
             .into_response();
     }
 
-    warn!("{} {} — 407 missing or invalid token", method, path);
+    warn!(
+        method = %method,
+        path = %path,
+        result = "unauthenticated",
+        "auth denied: missing or invalid token"
+    );
     (
         StatusCode::PROXY_AUTHENTICATION_REQUIRED,
         "407 Proxy Authentication Required",
