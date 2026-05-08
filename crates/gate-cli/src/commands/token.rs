@@ -35,7 +35,7 @@ struct CreateRequest {
 }
 
 pub async fn create(name: &str, scope: &[String], all_routes: bool) -> Result<()> {
-    validate_token_name(name)?;
+    validate_path_component(name, "token name")?;
     validate_scope(scope, all_routes)?;
 
     let config = Config::load()?;
@@ -219,14 +219,14 @@ fn validate_scope(scope: &[String], all_routes: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_token_name;
+    use crate::secure_file::validate_path_component;
 
     #[test]
     fn token_create_rejects_names_that_are_paths() {
         for name in ["", ".", "..", "../escape", "nested/name", r"nested\name"] {
-            assert!(validate_token_name(name).is_err());
+            assert!(validate_path_component(name, "token name").is_err());
         }
-        validate_token_name("laptop-1").unwrap();
+        validate_path_component("laptop-1", "token name").unwrap();
     }
 }
 
