@@ -11,7 +11,7 @@ profiles/
 
 The filename stem is the route or tool key. For example,
 `profiles/tools/aider.yaml` defines the `aider` adapter used by
-`coco activate --tool aider`.
+`gate activate --tool aider`.
 
 ## Route Files
 

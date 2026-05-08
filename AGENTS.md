@@ -1,4 +1,4 @@
-# CoCo Credential Gateway - Repository Guidelines
+# Enclave Credential Gateway - Repository Guidelines
 
 > For agent-specific orientation and project context, see [CLAUDE.md](./CLAUDE.md).
 > For what needs to be built next, see [spec/roadmap.md](./spec/roadmap.md).
@@ -6,15 +6,15 @@
 ## Project Shape
 
 ```
-crates/coco-gateway/   — Gateway server: proxy, auth, token registry, admin API
-crates/coco-cli/       — CLI: token management, shell activation, tool adapters
+crates/enclave-credential-gateway/ — Gateway server: proxy, auth, token registry, admin API
+crates/gate-cli/                   — CLI: token management, shell activation, tool adapters
 profiles/routes/       — Built-in route definitions (embedded at build time)
 profiles/tools/        — Tool-specific activation adapters
 docs/                  — Operational docs for the current state of the project
 spec/                  — Vision, roadmap, and implementation specs
 ```
 
-Current shipped route profiles are `openai`, `anthropic`, and `github`. TDX attestation, sealed credential storage, audit log, and `coco verify` are roadmap work, not current behavior.
+Current shipped route profiles are `openai`, `anthropic`, and `github`. TDX attestation, sealed credential storage, audit log, and `gate verify` are roadmap work, not current behavior.
 
 ## Development Rules
 

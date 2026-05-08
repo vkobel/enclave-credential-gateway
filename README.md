@@ -1,6 +1,6 @@
-# CoCo Credential Gateway
+# Enclave Credential Gateway
 
-CoCo is early work toward a TEE-backed credential gateway for AI agents. The working gateway already lets clients use scoped phantom tokens (`ccgw_...`) instead of real vendor keys; the next milestone is moving the trust boundary into Intel TDX with attestation and reproducible release artifacts.
+Enclave Credential Gateway is early work toward a TEE-backed credential gateway for AI agents. The working gateway already lets clients use scoped phantom tokens (`gate_...`) instead of real vendor keys; the next milestone is moving the trust boundary into Intel TDX with attestation and reproducible release artifacts.
 
 **Core idea:** credentials should be infrastructure, not agent state.
 
@@ -10,15 +10,17 @@ CoCo is early work toward a TEE-backed credential gateway for AI agents. The wor
 
 AI tools routinely hold real API keys in `.env` files, shell exports, CI secrets, and local config. That makes credentials easy to leak, hard to rotate, and difficult to audit.
 
-CoCo's target architecture is a network gateway running inside a hardware trust boundary. Agents receive revocable phantom tokens. The gateway validates the phantom, checks route scope, injects the real upstream credential server-side, and forwards the request. In the TEE-backed version, the infrastructure operator should be able to verify the binary without being able to read the real credentials.
+Enclave Credential Gateway's target architecture is a network gateway running inside a hardware trust boundary. Agents receive revocable phantom tokens. The gateway validates the phantom, checks route scope, injects the real upstream credential server-side, and forwards the request. In the TEE-backed version, the infrastructure operator should be able to verify the binary without being able to read the real credentials.
 
-| Capability | Local proxy | CoCo target |
+| Capability | Local proxy | Enclave Credential Gateway target |
 |---|---|---|
 | Agent cannot read the real key | yes | yes |
 | Central revocation and rotation | limited | yes |
 | Works from other devices or CI | no | yes |
 | Operator cannot read the real key | no | target: TDX boundary |
 | Verifiable running binary | no | target: attestation + MRTD |
+
+Verification is the key idea behind the TEE path. The `gate` CLI will have a normal verification mode that checks a gateway's attestation evidence before trusting it, and a heavier reproducibility mode that builds the same release locally, compares the resulting image and measurement material, and checks it against the live enclave registers reported by the server. The goal is for a technical user to verify both "this server is running inside the expected enclave" and "that enclave corresponds to source and release artifacts I can inspect."
 
 ---
 
@@ -28,10 +30,10 @@ This repo is an early work in progress. The proxy, token registry, and CLI are u
 
 - **Gateway/proxy** - Axum HTTP gateway with route matching, auth middleware, credential stripping, and upstream credential injection.
 - **Phantom token registry** - named tokens, Blake3-hashed at rest, persisted to `tokens.json`, with per-token route scope enforcement.
-- **Admin API** - `POST /admin/tokens`, `GET /admin/tokens`, `DELETE /admin/tokens/:id`, protected by `COCO_ADMIN_TOKEN`.
-- **CLI** - `coco token create/revoke/ls`, `coco activate`, and `coco git-credential`.
+- **Admin API** - `POST /admin/tokens`, `GET /admin/tokens`, `DELETE /admin/tokens/:id`, protected by `GATE_ADMIN_TOKEN`.
+- **CLI** - `gate admin token ...` for gateway administration, plus `gate activate` and `gate git-credential` for local tool setup.
 - **Tool activation** - generated config/env for `gh`, Codex, and Claude Code.
-- **Deployment scaffold** - Docker Compose with Caddy TLS and optional `COCO_DOMAIN`.
+- **Deployment scaffold** - Docker Compose with Caddy TLS and optional `GATE_DOMAIN`.
 
 **Not implemented yet:** TDX attestation (`GET /attest`), reproducible build/MRTD verification, sealed credential storage, audit log, token expiry, and additional route profiles beyond OpenAI, Anthropic, and GitHub.
 
@@ -46,7 +48,7 @@ Prerequisites: Docker + Compose, Rust/Cargo for the CLI, `gh`, `git`, `curl`, an
 ### 1. Start the Gateway
 
 ```bash
-export COCO_ADMIN_TOKEN="$(openssl rand -hex 32)"
+export GATE_ADMIN_TOKEN="$(openssl rand -hex 32)"
 export GITHUB_TOKEN=ghp_...       # real upstream token, stays server-side
 export ANTHROPIC_API_KEY=sk-ant-...
 export OPENAI_API_KEY=sk-...
@@ -55,25 +57,25 @@ docker compose up -d --build
 curl -k https://localhost/health
 ```
 
-`COCO_ADMIN_TOKEN` protects the admin API. Vendor keys are read by the gateway and injected server-side; clients receive only `ccgw_...` phantom tokens.
+`GATE_ADMIN_TOKEN` protects the admin API. Vendor keys are read by the gateway and injected server-side; clients receive only `gate_...` phantom tokens.
 
 ### 2. Trust Caddy's Local Certificate
 
 ```bash
-docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt /tmp/coco-caddy-root.crt
+docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt /tmp/gate-caddy-root.crt
 ```
 
 macOS:
 
 ```bash
 sudo security add-trusted-cert -d -r trustRoot \
-  -k /Library/Keychains/System.keychain /tmp/coco-caddy-root.crt
+  -k /Library/Keychains/System.keychain /tmp/gate-caddy-root.crt
 ```
 
 Debian/Ubuntu:
 
 ```bash
-sudo cp /tmp/coco-caddy-root.crt /usr/local/share/ca-certificates/coco-caddy-root.crt
+sudo cp /tmp/gate-caddy-root.crt /usr/local/share/ca-certificates/gate-caddy-root.crt
 sudo update-ca-certificates
 ```
 
@@ -83,18 +85,18 @@ Then verify without `-k`:
 curl https://localhost/health
 ```
 
-For a real hostname, set `COCO_DOMAIN=gw.example.com` before `docker compose up`. Caddy will request a public certificate for that name.
+For a real hostname, set `GATE_DOMAIN=gw.example.com` before `docker compose up`. Caddy will request a public certificate for that name.
 
 ### 3. Install the CLI
 
 ```bash
-cargo build --release -p coco-cli
+cargo build --release -p gate-cli
 export PATH="$PWD/target/release:$PATH"
 
-mkdir -p ~/.config/coco
-cat > ~/.config/coco/config.toml <<EOF
+mkdir -p ~/.config/gate
+cat > ~/.config/gate/config.toml <<EOF
 gateway_url = "https://localhost"
-admin_token = "$COCO_ADMIN_TOKEN"
+admin_token = "$GATE_ADMIN_TOKEN"
 EOF
 ```
 
@@ -105,29 +107,31 @@ EOF
 ### GitHub CLI and Git
 
 ```bash
-coco token create --name gh-local --scope github
-coco activate gh-local --tool gh
+gate admin token create --name gh-local --scope github
+gate activate gh-local --tool gh
 
 gh api user
 gh repo list
 gh repo clone OWNER/REPO
 ```
 
+`gate admin token create` talks to the gateway admin API and requires `admin_token` in config or `GATE_ADMIN_TOKEN`. `gate activate` is local: it reads the saved phantom token and configures the selected tool.
+
 Activation sets `GH_HOST`, `GH_ENTERPRISE_TOKEN`, and a generated Git credential helper. Git remotes stay token-free, for example `https://localhost/OWNER/REPO.git`.
 
 ### Claude Code
 
 ```bash
-coco token create --name claude-local --scope anthropic
-coco activate claude-local --tool claude-code
+gate admin token create --name claude-local --scope anthropic
+gate activate claude-local --tool claude-code
 claude
 ```
 
 ### Codex
 
 ```bash
-coco token create --name codex-local --scope openai
-coco activate codex-local --tool codex
+gate admin token create --name codex-local --scope openai
+gate activate codex-local --tool codex
 codex
 ```
 
@@ -136,16 +140,16 @@ codex
 If someone else operates the gateway, you only need its URL and a phantom token:
 
 ```toml
-# ~/.config/coco/config.toml
+# ~/.config/gate/config.toml
 gateway_url = "https://gw.example.com"
 
 [tokens.laptop]
-token = "ccgw_..."
+token = "gate_..."
 scope = ["github", "openai", "anthropic"]
 ```
 
 ```bash
-coco activate laptop --tool gh
+gate activate laptop --tool gh
 ```
 
 ---
@@ -171,7 +175,7 @@ Status codes: `407` = missing/invalid token, `403` = valid token with wrong scop
 ## How It Works Today
 
 ```text
-client sends ccgw_... phantom
+client sends gate_... phantom
     -> gateway validates token with a constant-time Blake3 hash comparison
     -> gateway checks route scope before credential lookup
     -> gateway removes the phantom credential from the request

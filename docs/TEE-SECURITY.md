@@ -1,4 +1,4 @@
-# CoCo Gateway - TEE Security Target
+# Enclave Credential Gateway - TEE Security Target
 
 > Platform target: Phala Cloud TDX CVM.
 > Framework: [KRAB](https://github.com/vkobel/coco-krab-framework) for scoring attestation, reproducibility, session binding, and key release.
@@ -12,7 +12,7 @@ Working today:
 - Path-based gateway/proxy with OpenAI, Anthropic, and GitHub route profiles.
 - Phantom token registry stored as Blake3 token hashes in `tokens.json`.
 - Per-token scope enforcement before credential resolution.
-- Admin API protected by `COCO_ADMIN_TOKEN`, compared constant-time in memory.
+- Admin API protected by `GATE_ADMIN_TOKEN`, compared constant-time in memory.
 - Docker Compose + Caddy deployment scaffold.
 
 Not implemented yet:
@@ -35,7 +35,7 @@ A2[Phala TDX] | R[f0/o1/l4/a4] | B2 | K3
 |---|---|---|
 | **A - Attestation** | `A2[Phala TDX]` | Silicon-rooted TDX quote. Phala's dstack paravisor sits in the launch TCB, which is a conscious trust delegation to Phala. |
 | **R - Reproducibility** | `R[f0/o1/l4/a4]` | Firmware opaque (`f0`); dstack OS source-available but not independently reproducible (`o1`); base image pinned by SHA256 digest (`l4`); gateway binary reproducible from a locked toolchain (`a4`). |
-| **B - Session Binding** | `B2` | `GET /attest?nonce=<hex>` hashes the caller nonce into `reportData`; `coco verify` checks nonce match and quote freshness. |
+| **B - Session Binding** | `B2` | `GET /attest?nonce=<hex>` hashes the caller nonce into `reportData`; `gate verify` checks nonce match and quote freshness. |
 | **K - Key Release** | `K3` | Phala KMS releases the sealing key only to a CVM whose measurement matches the registered value. |
 
 Post-v1 target: `A2[Phala TDX] | R[f0/o2/l4/a4] | B2 | K4`, with stronger dstack provenance and owner-direct credential injection.
@@ -93,13 +93,15 @@ Current implementation note: vendor credentials are read from environment variab
 
 ### R4 - Admin Token
 
-Current behavior: `COCO_ADMIN_TOKEN` is supplied at deploy time, held in memory, and compared constant-time for `/admin/*` requests.
+Current behavior: `GATE_ADMIN_TOKEN` is supplied at deploy time, held in memory, and compared constant-time for `/admin/*` requests.
 
 Target hardening: store only a hash or sealed representation of the admin secret after startup, and include admin-token handling in the attested deployment story.
 
 ### R5 - Client Verification
 
-`coco verify <gateway-url>` should:
+`gate verify <gateway-url>` should support two levels of verification.
+
+Normal mode:
 
 1. Generate a fresh nonce.
 2. Call `GET /attest?nonce=<hex>`.
@@ -109,6 +111,15 @@ Target hardening: store only a hash or sealed representation of the admin secret
 6. Enforce quote freshness.
 7. Compare MRTD to a pinned value or release artifact.
 8. Print a pass/fail summary with the binary reference.
+
+Reproducibility mode:
+
+- Build the same release locally from the published source and lockfiles.
+- Recreate the release image or equivalent measured artifact.
+- Compare the local digest and expected measurement material against the published release.
+- Compare that expected material to live enclave evidence, including MRTD/RTMR values and equivalent platform registers where applicable.
+
+The normal path answers "is this gateway attested and fresh?" The heavier path answers "can I independently reproduce what this gateway claims to be running?"
 
 ### R6 - Measurement Gap: Post-Boot Inputs
 
@@ -132,7 +143,7 @@ source commit
     -> GHCR image digest
     -> Phala CVM launch
     -> published MRTD
-    -> coco verify
+    -> gate verify
 ```
 
 The current repo has the source and Cargo lockfile pieces. The pinned toolchain, release workflow, reproduction script, and MRTD publication are roadmap work.

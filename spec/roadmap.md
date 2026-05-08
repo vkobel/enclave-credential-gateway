@@ -1,4 +1,4 @@
-# CoCo Credential Gateway - Roadmap
+# Enclave Credential Gateway - Roadmap
 
 ## Phase Status
 
@@ -8,13 +8,13 @@
 | **1c** | Docker/Caddy deployment scaffold, token registry, CLI activation | done |
 | **1b** | TDX attestation, CI image publishing, reproducibility groundwork | next |
 | **2** | Audit log, token expiry, response redaction, additional route profiles | not started |
-| **3** | Sealed credential store, `coco verify`, deploy polish, v1 release | not started |
+| **3** | Sealed credential store, `gate verify`, deploy polish, v1 release | not started |
 
 ---
 
 ## Done: Working Proxy and CLI
 
-**Gateway (`crates/coco-gateway`):**
+**Gateway (`crates/enclave-credential-gateway`):**
 
 - Constant-time phantom token validation.
 - Named token registry persisted to `tokens.json` with Blake3 token hashes.
@@ -25,12 +25,12 @@
 - Caddy TLS termination through Docker Compose.
 - `GET /health` endpoint.
 
-**CLI (`crates/coco-cli`):**
+**CLI (`crates/gate-cli`):**
 
-- Config at `~/.config/coco/config.toml`.
-- `coco token create/revoke/ls`.
-- `coco activate <name> --tool <gh|codex|claude-code>`.
-- `coco git-credential <name>` for GitHub smart-HTTP through the gateway.
+- Config at `~/.config/gate/config.toml`.
+- `gate admin token create/revoke/ls` for gateway token administration.
+- `gate activate <name> --tool <gh|codex|claude-code>` for local tool setup.
+- `gate git-credential <name>` for GitHub smart-HTTP through the gateway.
 
 **Profiles (`profiles/`):**
 
@@ -53,7 +53,7 @@
 - [ ] Start reproducibility hardening: pinned Rust toolchain, pinned base image, release digest publication, and a reproduction script.
 - [ ] Document a first Phala Cloud TDX deployment path.
 
-Acceptance: a deployed gateway exposes `/attest`, a non-debug quote can be retrieved, and release artifacts identify the image digest that future `coco verify` work will pin.
+Acceptance: a deployed gateway exposes `/attest`, a non-debug quote can be retrieved, and release artifacts identify the image digest that future `gate verify` work will pin.
 
 ---
 
@@ -62,7 +62,7 @@ Acceptance: a deployed gateway exposes `/attest`, a non-debug quote can be retri
 - [ ] Add per-token expiry and reject expired tokens.
 - [ ] Add append-only request audit log with token name, route, method, upstream status, byte counts, and policy action.
 - [ ] Add `GET /admin/audit` with simple limit and token filters.
-- [ ] Add `coco audit tail`.
+- [ ] Add `gate audit tail`.
 - [ ] Add response body credential redaction for upstream credential echoes.
 - [ ] Add additional route profiles after tests are in place: Groq, ElevenLabs, Telegram, Together, and Ollama.
 
@@ -72,8 +72,9 @@ Acceptance: a deployed gateway exposes `/attest`, a non-debug quote can be retri
 
 - [ ] Add sealed/encrypted credential storage at `/data/credentials.enc`.
 - [ ] Add admin credential management endpoints that never return credential values.
-- [ ] Add `coco creds add/rotate/rm/ls`.
-- [ ] Add `coco verify <gateway-url>` for TDX quote verification, nonce binding, debug-bit rejection, and MRTD comparison.
+- [ ] Add `gate creds add/rotate/rm/ls`.
+- [ ] Add `gate verify <gateway-url>` for TDX quote verification, nonce binding, debug-bit rejection, and MRTD comparison.
+- [ ] Add a heavier `gate verify --reproduce` path that locally rebuilds the release and compares expected measurements against live enclave evidence.
 - [ ] Write `docs/DEPLOY.md` for a complete Phala deployment.
 - [ ] Extend e2e coverage for expiry, audit entries, redaction, and sealed credential behavior.
 - [ ] Publish v1 release notes with image digest and MRTD.
