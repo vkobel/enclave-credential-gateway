@@ -1,26 +1,29 @@
-# Repository Guidelines
+# Enclave Credential Gateway - Repository Guidelines
 
-## Scope
-
-These instructions apply to the whole repository.
+> For agent-specific orientation and project context, see [CLAUDE.md](./CLAUDE.md).
+> For what needs to be built next, see [spec/roadmap.md](./spec/roadmap.md).
 
 ## Project Shape
 
-- `crates/coco-gateway`: Rust gateway, proxy, auth, profiles, admin API, registry, and integration tests.
-- `crates/coco-cli`: Rust CLI for token management, env rendering, and tool adapters.
-- `profiles/routes/*.yaml` and `profiles/tools/*.yaml`: source of truth for built-in route and tool definitions embedded at build time.
-- `examples/profile.json`: compose-mounted example runtime profile.
-- `docs/USING.md`: detailed client setup examples. Keep README concise and link here for long per-tool walkthroughs.
+```
+crates/enclave-credential-gateway/ — Gateway server: proxy, auth, token registry, admin API
+crates/gate-cli/                   — CLI: token management, shell activation, tool adapters
+profiles/routes/       — Built-in route definitions (embedded at build time)
+profiles/tools/        — Tool-specific activation adapters
+docs/                  — Operational docs for the current state of the project
+spec/                  — Vision, roadmap, and implementation specs
+```
+
+Current shipped route profiles are `openai`, `anthropic`, and `github`. TDX attestation, sealed credential storage, audit log, and `gate verify` are roadmap work, not current behavior.
 
 ## Development Rules
 
-- Keep route and tool behavior consistent across `profiles/routes`, `profiles/tools`, CLI adapter output, README route summaries, and e2e tests.
+- Keep route and tool behavior consistent across `profiles/routes`, `profiles/tools`, CLI adapter output, README route table, and e2e tests.
 - Prefer small, reversible diffs. Do not add dependencies unless explicitly needed.
-- Prefer `coco activate` in new docs and scripts.
-- Do not duplicate long usage guides in README. README should cover overview, quickstart, route locations, core commands, and tests.
+- Do not duplicate long usage guides in README. README covers vision, current state, quickstart, and route table; detailed setup goes in `docs/USING.md`.
 
 ## Verification
 
-- Run `cargo fmt --check` and `cargo test --workspace` for normal changes.
-- Run `./scripts/test-e2e.sh` for changes touching gateway routing, auth, registry tokens, Docker compose, CLI env/tool behavior, or README testing instructions.
-- Live OpenAI/Anthropic e2e checks are optional and should be reported as skipped when credentials are unavailable.
+- **Always:** `cargo fmt --check` and `cargo test --workspace`
+- **When touching** gateway routing, auth, registry, Docker config, CLI activation, or README test instructions: `./scripts/test-e2e.sh`
+- Live upstream checks (OpenAI, Anthropic, GitHub) are optional and skipped when credentials are absent.

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/coco-gateway",
-    "crates/coco-cli",
+    "crates/enclave-credential-gateway",
+    "crates/gate-cli",
 ]

@@ -1,301 +1,193 @@
-# CoCo Credential Gateway
+# Enclave Credential Gateway
 
-CoCo is a credential proxy for AI agents and developer tools. Clients use scoped CoCo tokens (`ccgw_...`) instead of real vendor keys. The gateway validates the CoCo token, checks route scope, removes the client credential, and injects the real upstream credential server-side.
+Enclave Credential Gateway is early work toward a TEE-backed credential gateway for AI agents. The working gateway already lets clients use scoped phantom tokens (`gate_...`) instead of real vendor keys; the next milestone is moving the trust boundary into Intel TDX with attestation and reproducible release artifacts.
 
-Use it when tools like `gh`, Codex, or Claude Code need vendor APIs without placing real API keys on the machine running the tool.
+**Core idea:** credentials should be infrastructure, not agent state.
 
-**Supported tool adapters:** `gh` (GitHub CLI + Git smart-HTTP), `codex` (OpenAI Codex CLI), `claude-code` (Anthropic Claude Code).
+---
 
-## Local Gateway Deployment
+## Vision
 
-This example runs the gateway locally with Docker Compose and Caddy TLS. It uses `https://localhost` because `gh` treats custom GitHub hosts as HTTPS GitHub Enterprise hosts.
+AI tools routinely hold real API keys in `.env` files, shell exports, CI secrets, and local config. That makes credentials easy to leak, hard to rotate, and difficult to audit.
 
-Prerequisites:
+Enclave Credential Gateway's target architecture is a network gateway running inside a hardware trust boundary. Agents receive revocable phantom tokens. The gateway validates the phantom, checks route scope, injects the real upstream credential server-side, and forwards the request. In the TEE-backed version, the infrastructure operator should be able to verify the binary without being able to read the real credentials.
 
-- Docker with Compose
-- Rust/Cargo, for the local `coco` CLI
-- `gh`, `git`, `curl`, and `jq`
-- A real GitHub token in `GITHUB_TOKEN` for the gateway to inject upstream
+| Capability | Local proxy | Enclave Credential Gateway target |
+|---|---|---|
+| Agent cannot read the real key | yes | yes |
+| Central revocation and rotation | limited | yes |
+| Works from other devices or CI | no | yes |
+| Operator cannot read the real key | no | target: TDX boundary |
+| Verifiable running binary | no | target: attestation + MRTD |
+
+Verification is the key idea behind the TEE path. The `gate` CLI will have a normal verification mode that checks a gateway's attestation evidence before trusting it, and a heavier reproducibility mode that builds the same release locally, compares the resulting image and measurement material, and checks it against the live enclave registers reported by the server. The goal is for a technical user to verify both "this server is running inside the expected enclave" and "that enclave corresponds to source and release artifacts I can inspect."
+
+---
+
+## Working Today
+
+This repo is an early work in progress. The proxy, token registry, and CLI are usable locally and through Docker Compose:
+
+- **Gateway/proxy** - Axum HTTP gateway with route matching, auth middleware, credential stripping, and upstream credential injection.
+- **Phantom token registry** - named tokens, Blake3-hashed at rest, persisted to `tokens.json`, with per-token route scope enforcement.
+- **Admin API** - `POST /admin/tokens`, `GET /admin/tokens`, `DELETE /admin/tokens/:id`, protected by `GATE_ADMIN_TOKEN`.
+- **CLI** - `gate admin token ...` for gateway administration, plus `gate activate` and `gate git-credential` for local tool setup.
+- **Tool activation** - generated config/env for `gh`, Codex, and Claude Code.
+- **Deployment scaffold** - Docker Compose with Caddy TLS and optional `GATE_DOMAIN`.
+
+**Not implemented yet:** TDX attestation (`GET /attest`), reproducible build/MRTD verification, sealed credential storage, audit log, token expiry, and additional route profiles beyond OpenAI, Anthropic, and GitHub.
+
+See [spec/roadmap.md](./spec/roadmap.md) for the implementation plan.
+
+---
+
+## Quick Start
+
+Prerequisites: Docker + Compose, Rust/Cargo for the CLI, `gh`, `git`, `curl`, and `jq`.
 
 ### 1. Start the Gateway
 
-Run this from the repository root:
-
 ```bash
-export COCO_ADMIN_TOKEN="$(openssl rand -hex 32)"
-export GITHUB_TOKEN=ghp_...          # real upstream GitHub token, kept server-side
+export GATE_ADMIN_TOKEN="$(openssl rand -hex 32)"
+export GITHUB_TOKEN=ghp_...       # real upstream token, stays server-side
+export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-...
 
 docker compose up -d --build
-```
-
-What these values do:
-
-- `COCO_ADMIN_TOKEN` protects the gateway admin API. Save it; the CLI needs it to create and revoke CoCo tokens.
-- `GITHUB_TOKEN` is the real GitHub credential. Clients never receive it; the gateway injects it only when forwarding `github` traffic upstream.
-- Compose stores the token registry in the `coco-data` volume at `/data/tokens.json`.
-- Caddy listens on local ports `80` and `443` and reverse-proxies to `coco-gateway:8080`.
-
-Check that the services are up:
-
-```bash
-docker compose ps
 curl -k https://localhost/health
 ```
 
-`curl -k` is only for the first check, before trusting Caddy's local certificate.
+`GATE_ADMIN_TOKEN` protects the admin API. Vendor keys are read by the gateway and injected server-side; clients receive only `gate_...` phantom tokens.
 
 ### 2. Trust Caddy's Local Certificate
 
-Caddy serves `https://localhost` with its local CA by default. Trust that CA once so `curl`, `gh`, and Git accept the gateway certificate.
-
 ```bash
-docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt /tmp/coco-caddy-root.crt
+docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt /tmp/gate-caddy-root.crt
 ```
 
-On macOS:
+macOS:
 
 ```bash
 sudo security add-trusted-cert -d -r trustRoot \
-  -k /Library/Keychains/System.keychain /tmp/coco-caddy-root.crt
+  -k /Library/Keychains/System.keychain /tmp/gate-caddy-root.crt
 ```
 
-On Debian/Ubuntu:
+Debian/Ubuntu:
 
 ```bash
-sudo cp /tmp/coco-caddy-root.crt /usr/local/share/ca-certificates/coco-caddy-root.crt
+sudo cp /tmp/gate-caddy-root.crt /usr/local/share/ca-certificates/gate-caddy-root.crt
 sudo update-ca-certificates
 ```
 
-Now verify without `-k`:
+Then verify without `-k`:
 
 ```bash
 curl https://localhost/health
 ```
 
-For a real hostname, set `COCO_DOMAIN=gw.example.com` before `docker compose up`. Caddy will then request a public certificate for that name.
+For a real hostname, set `GATE_DOMAIN=gw.example.com` before `docker compose up`. Caddy will request a public certificate for that name.
 
-### 3. Install and Configure the CLI
-
-Build the CLI and put it on your `PATH`. The Git credential helper path used by `coco activate --tool gh` relies on `coco` being executable from the shell where Git runs.
+### 3. Install the CLI
 
 ```bash
-cargo build --release -p coco-cli
+cargo build --release -p gate-cli
 export PATH="$PWD/target/release:$PATH"
-```
 
-Create `~/.config/coco/config.toml`:
-
-```bash
-mkdir -p ~/.config/coco
-cat > ~/.config/coco/config.toml <<EOF
+mkdir -p ~/.config/gate
+cat > ~/.config/gate/config.toml <<EOF
 gateway_url = "https://localhost"
-admin_token = "$COCO_ADMIN_TOKEN"
+admin_token = "$GATE_ADMIN_TOKEN"
 EOF
 ```
 
-`gateway_url` is the public URL clients call. `admin_token` is only for token administration; it is not sent to upstream vendors.
+---
 
-## GitHub CLI and Git
+## Usage Examples
 
-This is the full local `gh` flow: create a GitHub-scoped CoCo token, activate the shell environment, and use both `gh` and plain Git through the gateway.
-
-### 1. Create a CoCo Token for GitHub
+### GitHub CLI and Git
 
 ```bash
-coco token create --name gh-local --scope github
-```
+gate admin token create --name gh-local --scope github
+gate activate gh-local --tool gh
 
-The CLI sends an authenticated `POST /admin/tokens` request to the local gateway. The gateway stores only a hash of the new CoCo token in its registry. The CLI saves the returned token under `[tokens.gh-local]` in `~/.config/coco/config.toml`.
-
-You can inspect the saved client config:
-
-```bash
-sed -n '/tokens.gh-local/,$p' ~/.config/coco/config.toml
-```
-
-The saved token is the `ccgw_...` client credential. It is scoped to `github`, so it can use GitHub REST routes, the `gh` `/api/v3/...` compatibility route, and Git smart-HTTP clone/fetch/push routes. It cannot access routes like `openai` or `anthropic`.
-
-### 2. Activate `gh` and Git
-
-```bash
-coco activate gh-local --tool gh
-```
-
-Activation does four things:
-
-- `GH_HOST=localhost` tells `gh` to send GitHub API calls to the local gateway host.
-- `GH_ENTERPRISE_TOKEN=ccgw_...` is the token `gh` actually reads for custom hosts.
-- `GH_TOKEN=ccgw_...` is also exported for scripts and manual curl examples.
-- `GIT_CONFIG_GLOBAL=~/.config/coco/generated/gh/gh-local/gitconfig` points Git at a generated config file for the gateway host.
-
-The generated Git config includes your normal `~/.gitconfig`, resets inherited credential helpers for the gateway URL, and then adds `!coco git-credential gh-local`. Re-running activation is safe because the file is regenerated deterministically. For current-shell activation instead of a subshell, run `eval "$(coco activate gh-local --eval --tool gh)"`.
-
-### 3. Use `gh` and Git
-
-```bash
 gh api user
 gh repo list
 gh repo clone OWNER/REPO
-
-cd REPO
-git fetch
-git pull
-git push
 ```
 
-`gh` REST calls go to `https://localhost/api/v3/...`; the gateway strips `/v3` and forwards them to `https://api.github.com` with the real `GITHUB_TOKEN`.
+`gate admin token create` talks to the gateway admin API and requires `admin_token` in config or `GATE_ADMIN_TOKEN`. `gate activate` is local: it reads the saved phantom token and configures the selected tool.
 
-`gh repo clone` shells out to Git. Git talks to paths like `https://localhost/OWNER/REPO.git/info/refs`; the gateway forwards those smart-HTTP requests to `https://github.com`. The generated Git credential helper supplies the CoCo token as HTTP Basic auth only for the gateway host.
-
-Confirm that remotes stay token-free:
-
-```bash
-git remote -v
-```
-
-The remote should contain `https://localhost/OWNER/REPO.git`, not a `ccgw_...` token and not the real `GITHUB_TOKEN`.
-
-## Other Tool Examples
-
-For longer per-tool setup, see [docs/USING.md](./docs/USING.md).
-
-### Codex
-
-```bash
-coco token create --name codex-local --scope openai
-coco activate codex-local --tool codex
-codex
-```
-
-Codex needs config files for the gateway URL and API-key auth. Activation writes generated Codex files under `~/.config/coco/generated/codex/<token>/home` and sets `CODEX_HOME` in the activated subshell.
+Activation sets `GH_HOST`, `GH_ENTERPRISE_TOKEN`, and a generated Git credential helper. Git remotes stay token-free, for example `https://localhost/OWNER/REPO.git`.
 
 ### Claude Code
 
 ```bash
-coco token create --name claude-local --scope anthropic
-coco activate claude-local --tool claude-code
+gate admin token create --name claude-local --scope anthropic
+gate activate claude-local --tool claude-code
 claude
 ```
 
-## Use an Existing Gateway
+### Codex
 
-If someone else operates the gateway, you only need:
+```bash
+gate admin token create --name codex-local --scope openai
+gate activate codex-local --tool codex
+codex
+```
 
-- `gateway_url`, for example `https://gw.example.com`
-- a CoCo token, for example `ccgw_...`
+### Existing Gateway
 
-Install the CLI, then create `~/.config/coco/config.toml`:
+If someone else operates the gateway, you only need its URL and a phantom token:
 
 ```toml
+# ~/.config/gate/config.toml
 gateway_url = "https://gw.example.com"
 
 [tokens.laptop]
-token = "ccgw_..."
+token = "gate_..."
 scope = ["github", "openai", "anthropic"]
-all_routes = false
 ```
-
-The local `scope` list tells the CLI which environment variables and tool adapters to render. It should match the scopes granted by the gateway. Use `all_routes = true` only for unrestricted tokens.
-
-Then activate the tool you need:
 
 ```bash
-coco activate laptop --tool gh
-coco activate laptop --tool codex
-coco activate laptop --tool claude-code
+gate activate laptop --tool gh
 ```
+
+---
 
 ## Routes
 
-Built-in routes and tool adapters are defined as one file per entry under [profiles/routes](./profiles/routes) and [profiles/tools](./profiles/tools), with contributor notes in [profiles/README.md](./profiles/README.md). They are embedded into the binaries at build time.
+Built-in routes are defined in [`profiles/routes/`](./profiles/routes) and embedded at build time. Tool adapters are defined in [`profiles/tools/`](./profiles/tools).
 
-Token scopes use the top-level route key. Unrestricted tokens are explicit: create them with `coco token create --name laptop --all-routes`, which stores `all_routes = true` in the local CLI config. GitHub also owns an `/api/v3/...` compatibility alias for `gh`; it scopes as `github` and strips `/v3` before forwarding. Git smart-HTTP paths also scope as `github` and proxy to `github.com`.
+| Path prefix | Scope | Upstream | Credential env |
+|---|---|---|---|
+| `/openai/...` | `openai` | `https://api.openai.com` | `OPENAI_API_KEY` |
+| `/anthropic/...` | `anthropic` | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` |
+| `/github/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` |
+| `/api/v3/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` (`gh` compatibility, strips `/v3`) |
+| `/<owner>/<repo>.git/...` | `github` | `https://github.com` | `GITHUB_TOKEN` (Git smart-HTTP) |
 
-| Path prefix | Scope | Upstream | Gateway credential env | Injection |
-|---|---|---|---|---|
-| `/openai/...` | `openai` | `https://api.openai.com` | `OPENAI_API_KEY` | `Authorization: Bearer ...` |
-| `/anthropic/...` | `anthropic` | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` | OAuth tokens as `Authorization: Bearer ...` plus `anthropic-beta: oauth-2025-04-20`; API keys as `x-api-key`; rejects `ccgw_...` phantom values upstream |
-| `/github/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` | `Authorization: Bearer ...` |
-| `/api/v3/...` | `github` | `https://api.github.com` | `GITHUB_TOKEN` | `gh` compatibility route; strips route-relative `/v3` |
-| `/<owner>/<repo>.git/{info/refs,git-upload-pack,git-receive-pack}` | `github` | `https://github.com` | `GITHUB_TOKEN` | Git smart-HTTP; accepts HTTP Basic auth |
+Planned future profiles include Groq, ElevenLabs, Telegram, Together, and Ollama.
 
-### Planned routes
+Status codes: `407` = missing/invalid token, `403` = valid token with wrong scope, `404` = unknown route, `503` = required real credential env var is not set.
 
-These routes are not yet in the embedded manifest but are intended for future integration:
+---
 
-| Scope | Upstream | Notes |
-|---|---|---|
-| `ollama` | `https://ollama.com` | Ollama Cloud; `OLLAMA_API_KEY` |
-| `groq` | `https://api.groq.com` | `GROQ_API_KEY` |
-| `together` | `https://api.together.xyz` | `TOGETHER_API_KEY` |
-| `elevenlabs` | `https://api.elevenlabs.io` | `ELEVENLABS_API_KEY`; uses `xi-api-key` header |
-| `telegram` | `https://api.telegram.org` | `TELEGRAM_BOT_TOKEN`; requires URL-path injection mode |
-
-Route manifest syntax is route-first:
-
-```json
-{
-  "routes": {
-    "<route-key>": {
-      "upstream": "https://api.example.com",
-      "aliases": [
-        { "prefix": "<compat-path-prefix>", "strip_prefix": "/optional/path/to/remove" }
-      ],
-      "credential_sources": [
-        {
-          "env": "REAL_VENDOR_TOKEN_ENV",
-          "inject_header": "Authorization",
-          "format": "Bearer {}",
-          "prefix": "optional-token-prefix"
-        }
-      ],
-      "inject_mode": "header"
-    }
-  }
-}
-```
-
-In the split profile layout, the route key comes from the filename. For example,
-`profiles/routes/example.yaml` contains the body of the `<route-key>` object
-shown above and defines the `example` scope.
-
-Supported fields:
-
-| Field | Purpose |
-|---|---|
-| `upstream` | Base upstream URL |
-| `credential_sources` | Ordered env-backed credentials with `env`, `inject_header`, optional `format`, optional `prefix`, optional `reject_prefixes`, and optional `extra_headers` |
-| `aliases` | Optional compatibility prefixes owned by this route, such as GitHub's `api` alias |
-| `strip_prefix` | Alias path prefix to remove before forwarding |
-| `inject_mode` | `header` or `url_path`; defaults to `header` |
-| `url_path_prefix` | Prefix used by `url_path` credential injection |
-| `git_protocol` | Optional companion route that proxies git smart-HTTP requests to a separate upstream. Currently used only by `github`; shares scope and credentials with the parent route. |
-
-## How It Works
+## How It Works Today
 
 ```text
-client sends CoCo token -> gateway validates token and route scope
-                         -> gateway selects the route profile
-                         -> gateway removes the client credential
-                         -> gateway injects the real server-side credential
-                         -> upstream API receives only the real credential
+client sends gate_... phantom
+    -> gateway validates token with a constant-time Blake3 hash comparison
+    -> gateway checks route scope before credential lookup
+    -> gateway removes the phantom credential from the request
+    -> gateway injects the real server-side credential
+    -> upstream receives only the real credential
 ```
 
-Status codes:
+The TEE version will keep the same request model, but move the credential boundary into Intel TDX and expose public attestation. See [spec/tee-security.md](./spec/tee-security.md) for the target security model.
 
-| Code | Meaning |
-|---|---|
-| `200` | Upstream request succeeded |
-| `407` | Missing, revoked, or invalid CoCo token |
-| `403` | Token is valid but not scoped for this route |
-| `404` | Unknown route prefix |
-| `503` | Route exists but required real credential env var is missing |
-
-`COCO_PHANTOM_TOKEN` is still supported as a legacy single-token fallback, but the registry/admin API path is preferred.
+---
 
 ## Testing
-
-Run the full local test suite before opening a PR:
 
 ```bash
 cargo fmt --check
@@ -303,40 +195,14 @@ cargo test --workspace
 ./scripts/test-e2e.sh
 ```
 
-What these do:
+`test-e2e.sh` exercises the Docker flow: gateway startup, admin API, token validation, scope enforcement, revocation, and CLI activation. Live upstream checks are skipped when credentials are not set.
 
-- `cargo fmt --check` verifies Rust formatting without changing files.
-- `cargo test --workspace` runs CLI tests plus gateway auth, proxy, registry, admin API, profile parsing, inject-mode, and token-scope tests. Live gateway feature tests are ignored unless explicitly enabled.
-- `./scripts/test-e2e.sh` runs the Docker-backed end-to-end flow: gateway startup, admin token creation, missing/wrong token handling, route-scope denial, revocation, CLI activation, and optional upstream credential injection checks.
-
-Run focused package tests while iterating:
-
-```bash
-cargo test -p coco-gateway
-cargo test -p coco-cli
-```
-
-Optional live upstream checks:
-
-```bash
-export OPENAI_API_KEY=sk-...
-export ANTHROPIC_API_KEY=sk-ant-api-...
-export GITHUB_TOKEN=ghp_...
-./scripts/test-e2e.sh
-```
-
-Missing real upstream credentials are skipped, not treated as failures. Live GitHub checks exercise REST calls plus Git clone, push, and pull through the gateway.
-
-Run the ignored live-gateway Rust tests against an already running gateway:
-
-```bash
-export TEST_PHANTOM_TOKEN=ccgw_...
-cargo test -p coco-gateway --features integration
-```
+---
 
 ## Docs
 
-- [docs/USING.md](./docs/USING.md): per-tool setup for Claude Code, Codex, and `gh`.
-- [docs/TEE-SECURITY.md](./docs/TEE-SECURITY.md): TEE and deployment security notes.
-- [docs/product.md](./docs/product.md): product framing.
-- [docs/task.md](./docs/task.md): project task history.
+- [spec/vision.md](./spec/vision.md) - product vision and long-term direction
+- [spec/roadmap.md](./spec/roadmap.md) - current status and next implementation milestones
+- [docs/USING.md](./docs/USING.md) - detailed per-tool setup for Claude Code, Codex, and `gh`
+- [spec/tee-security.md](./spec/tee-security.md) - target TEE security requirements and threat model
+- [profiles/README.md](./profiles/README.md) - route and tool profile format

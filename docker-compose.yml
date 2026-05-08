@@ -1,17 +1,17 @@
 services:
-  coco-gateway:
+  enclave-credential-gateway:
     build: .
     expose:
       - "8080"
     environment:
-      - COCO_PHANTOM_TOKEN
-      - COCO_ADMIN_TOKEN=${COCO_ADMIN_TOKEN}
-      - COCO_TOKENS_FILE=/data/tokens.json
+      - GATE_PHANTOM_TOKEN
+      - GATE_ADMIN_TOKEN=${GATE_ADMIN_TOKEN}
+      - GATE_TOKENS_FILE=/data/tokens.json
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
     volumes:
-      - coco-data:/data
+      - gate-data:/data
     restart: unless-stopped
 
   caddy:
@@ -25,9 +25,9 @@ services:
       - caddy-config:/config
     restart: unless-stopped
     depends_on:
-      - coco-gateway
+      - enclave-credential-gateway
 
 volumes:
-  coco-data:
+  gate-data:
   caddy-data:
   caddy-config:

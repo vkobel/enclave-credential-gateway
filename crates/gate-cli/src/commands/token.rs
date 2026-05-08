@@ -35,7 +35,7 @@ struct CreateRequest {
 }
 
 pub async fn create(name: &str, scope: &[String], all_routes: bool) -> Result<()> {
-    validate_token_name(name)?;
+    validate_path_component(name, "token name")?;
     validate_scope(scope, all_routes)?;
 
     let config = Config::load()?;
@@ -124,19 +124,72 @@ pub async fn list() -> Result<()> {
         return Ok(());
     }
 
-    for t in &tokens {
-        let scope = if t.all_routes {
-            "*".to_string()
-        } else {
-            t.scope.join(",")
-        };
-        println!("{:<36} {:<15} {:<10} {}", t.id, t.name, t.status, scope);
-    }
+    print_token_table(&tokens);
     Ok(())
 }
 
-fn validate_token_name(name: &str) -> Result<()> {
-    validate_path_component(name, "token name")
+fn print_token_table(tokens: &[TokenListEntry]) {
+    let rows: Vec<_> = tokens
+        .iter()
+        .map(|token| {
+            let scope = if token.all_routes {
+                "all routes".to_string()
+            } else if token.scope.is_empty() {
+                "none".to_string()
+            } else {
+                token.scope.join(", ")
+            };
+            [
+                token.name.clone(),
+                token.status.to_uppercase(),
+                scope,
+                token.id.clone(),
+            ]
+        })
+        .collect();
+
+    let headers = ["NAME", "STATUS", "SCOPE", "ID"];
+    let mut widths = headers.map(str::len);
+    for row in &rows {
+        for (idx, cell) in row.iter().enumerate() {
+            widths[idx] = widths[idx].max(cell.len());
+        }
+    }
+
+    print_row(&headers, &widths);
+    print_separator(&widths);
+    for row in &rows {
+        let cells = [
+            row[0].as_str(),
+            row[1].as_str(),
+            row[2].as_str(),
+            row[3].as_str(),
+        ];
+        print_row(&cells, &widths);
+    }
+}
+
+fn print_row(cells: &[&str; 4], widths: &[usize; 4]) {
+    println!(
+        "{:<name_width$}  {:<status_width$}  {:<scope_width$}  {}",
+        cells[0],
+        cells[1],
+        cells[2],
+        cells[3],
+        name_width = widths[0],
+        status_width = widths[1],
+        scope_width = widths[2],
+    );
+}
+
+fn print_separator(widths: &[usize; 4]) {
+    println!(
+        "{}  {}  {}  {}",
+        "-".repeat(widths[0]),
+        "-".repeat(widths[1]),
+        "-".repeat(widths[2]),
+        "-".repeat(widths[3]),
+    );
 }
 
 fn validate_scope(scope: &[String], all_routes: bool) -> Result<()> {
@@ -166,14 +219,14 @@ fn validate_scope(scope: &[String], all_routes: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_token_name;
+    use crate::secure_file::validate_path_component;
 
     #[test]
     fn token_create_rejects_names_that_are_paths() {
         for name in ["", ".", "..", "../escape", "nested/name", r"nested\name"] {
-            assert!(validate_token_name(name).is_err());
+            assert!(validate_path_component(name, "token name").is_err());
         }
-        validate_token_name("laptop-1").unwrap();
+        validate_path_component("laptop-1", "token name").unwrap();
     }
 }
 

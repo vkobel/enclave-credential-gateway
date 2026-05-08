@@ -1,9 +1,9 @@
-//! Integration tests for coco-gateway
+//! Integration tests for enclave-credential-gateway
 
 /// Unit tests for auth middleware helpers
 mod auth_tests {
 
-    use coco_gateway::validate_bearer_or_raw;
+    use enclave_credential_gateway::validate_bearer_or_raw;
     use zeroize::Zeroizing;
 
     fn token(s: &str) -> Zeroizing<String> {
@@ -57,7 +57,7 @@ mod auth_tests {
 mod extract_candidate_tokens_tests {
     use axum::{body::Body, http::Request};
     use base64::{engine::general_purpose::STANDARD, Engine as _};
-    use coco_gateway::auth::extract_candidate_tokens;
+    use enclave_credential_gateway::auth::extract_candidate_tokens;
 
     fn req_with_auth(value: &str) -> Request<Body> {
         Request::builder()
@@ -73,9 +73,9 @@ mod extract_candidate_tokens_tests {
 
     #[test]
     fn bearer_extracts_token() {
-        let r = req_with_auth("Bearer ccgw_abc");
+        let r = req_with_auth("Bearer gate_abc");
         let cands = extract_candidate_tokens(&r);
-        assert!(cands.contains(&"ccgw_abc".to_string()));
+        assert!(cands.contains(&"gate_abc".to_string()));
     }
 
     #[test]
@@ -87,9 +87,9 @@ mod extract_candidate_tokens_tests {
 
     #[test]
     fn bearer_preserves_mixed_case() {
-        let r = req_with_auth("Bearer ccgw_AbCdEf");
+        let r = req_with_auth("Bearer gate_AbCdEf");
         let cands = extract_candidate_tokens(&r);
-        assert_eq!(cands, vec!["ccgw_AbCdEf".to_string()]);
+        assert_eq!(cands, vec!["gate_AbCdEf".to_string()]);
     }
 
     #[test]
@@ -101,31 +101,31 @@ mod extract_candidate_tokens_tests {
 
     #[test]
     fn basic_decodes_token_in_password_slot() {
-        let r = req_with_auth(&format!("Basic {}", b64("x-access-token:ccgw_AbC")));
+        let r = req_with_auth(&format!("Basic {}", b64("x-access-token:gate_AbC")));
         let cands = extract_candidate_tokens(&r);
-        assert!(cands.contains(&"ccgw_AbC".to_string()));
+        assert!(cands.contains(&"gate_AbC".to_string()));
     }
 
     #[test]
     fn basic_decodes_token_in_username_slot() {
-        let r = req_with_auth(&format!("Basic {}", b64("ccgw_AbC:x-oauth-basic")));
+        let r = req_with_auth(&format!("Basic {}", b64("gate_AbC:x-oauth-basic")));
         let cands = extract_candidate_tokens(&r);
-        assert!(cands.contains(&"ccgw_AbC".to_string()));
+        assert!(cands.contains(&"gate_AbC".to_string()));
     }
 
     #[test]
     fn basic_preserves_mixed_case() {
-        let r = req_with_auth(&format!("Basic {}", b64("x:ccgw_AbCdEf")));
+        let r = req_with_auth(&format!("Basic {}", b64("x:gate_AbCdEf")));
         let cands = extract_candidate_tokens(&r);
-        assert!(cands.contains(&"ccgw_AbCdEf".to_string()));
+        assert!(cands.contains(&"gate_AbCdEf".to_string()));
     }
 
     #[test]
     fn basic_pushes_both_halves() {
-        let r = req_with_auth(&format!("Basic {}", b64("oauth2:ccgw_xyz")));
+        let r = req_with_auth(&format!("Basic {}", b64("oauth2:gate_xyz")));
         let cands = extract_candidate_tokens(&r);
         assert!(cands.contains(&"oauth2".to_string()));
-        assert!(cands.contains(&"ccgw_xyz".to_string()));
+        assert!(cands.contains(&"gate_xyz".to_string()));
     }
 
     #[test]
@@ -162,12 +162,12 @@ mod extract_candidate_tokens_tests {
     fn duplicate_candidates_are_deduplicated() {
         let r = Request::builder()
             .uri("/")
-            .header("authorization", "Bearer ccgw_dup")
-            .header("proxy-authorization", "Bearer ccgw_dup")
+            .header("authorization", "Bearer gate_dup")
+            .header("x-other", "Bearer gate_dup")
             .body(Body::empty())
             .unwrap();
         let cands = extract_candidate_tokens(&r);
-        assert_eq!(cands.iter().filter(|c| c.as_str() == "ccgw_dup").count(), 1);
+        assert_eq!(cands.iter().filter(|c| c.as_str() == "gate_dup").count(), 1);
     }
 
     #[test]
@@ -184,10 +184,10 @@ mod extract_candidate_tokens_tests {
 
 /// Profile loading and schema tests
 mod profile_tests {
-    use coco_gateway::profile::{
+    use enclave_credential_gateway::profile::{
         load_embedded_routes, try_load_routes_from_files, try_load_routes_from_str,
     };
-    use coco_gateway::{InjectMode, ProfileRoute, RouteEntry, RouteMatcher};
+    use enclave_credential_gateway::{InjectMode, ProfileRoute, RouteEntry, RouteMatcher};
 
     #[test]
     fn test_credential_sources_parsing() {
@@ -461,7 +461,7 @@ credential_sources:
 
 /// `is_git_smart_http` matcher tests.
 mod git_matcher_tests {
-    use coco_gateway::is_git_smart_http;
+    use enclave_credential_gateway::is_git_smart_http;
 
     #[test]
     fn matches_info_refs() {
@@ -519,8 +519,8 @@ mod git_matcher_tests {
 /// Tests for `resolve_route` covering both the prefix matcher and the new
 /// git-smart-http matcher.
 mod resolver_tests {
-    use coco_gateway::profile::{load_embedded_routes, try_load_routes_from_str};
-    use coco_gateway::{resolve_route, RouteMatcher};
+    use enclave_credential_gateway::profile::{load_embedded_routes, try_load_routes_from_str};
+    use enclave_credential_gateway::{resolve_route, RouteMatcher};
 
     #[test]
     fn resolve_prefix_match_returns_existing_entry() {
@@ -748,7 +748,7 @@ mod header_tests {
 
 /// Token registry tests
 mod registry_tests {
-    use coco_gateway::{TokenCreateError, TokenRegistry, TokenStatus};
+    use enclave_credential_gateway::{TokenCreateError, TokenRegistry, TokenStatus};
     use tempfile::TempDir;
 
     async fn create_registry() -> (TokenRegistry, TempDir) {
@@ -766,7 +766,7 @@ mod registry_tests {
             .await
             .unwrap();
 
-        assert!(token_value.starts_with("ccgw_"));
+        assert!(token_value.starts_with("gate_"));
         assert_eq!(record.name, "test");
         assert_eq!(record.status, TokenStatus::Active);
 
@@ -783,7 +783,7 @@ mod registry_tests {
             .await
             .unwrap();
 
-        let validated = registry.validate("ccgw_wrong").await;
+        let validated = registry.validate("gate_wrong").await;
         assert!(validated.is_none());
     }
 

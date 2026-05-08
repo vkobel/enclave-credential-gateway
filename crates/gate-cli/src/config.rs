@@ -28,13 +28,15 @@ pub struct Config {
 }
 
 impl Config {
+    const DEFAULT_GATEWAY_URL: &'static str = "https://localhost";
+
     pub fn config_dir() -> PathBuf {
         #[cfg(test)]
         if let Some(root) = crate::test_support::config_root_override() {
             return root;
         }
 
-        Self::home_dir().join(".config").join("coco")
+        Self::home_dir().join(".config").join("gate")
     }
 
     pub fn path() -> PathBuf {
@@ -67,13 +69,18 @@ impl Config {
     pub fn load() -> Result<Config> {
         let path = Self::path();
         if !path.exists() {
-            anyhow::bail!(
-                "Config not found at {}. Run: mkdir -p ~/.config/coco && create config.toml",
-                path.display()
-            );
+            let config = Config {
+                gateway_url: Self::DEFAULT_GATEWAY_URL.to_string(),
+                ..Config::default()
+            };
+            config.save().with_context(|| {
+                format!("Failed to create default config at {}", path.display())
+            })?;
+            return Ok(config);
         }
         let data = std::fs::read_to_string(&path).context("Failed to read config")?;
         let mut config: Config = toml::from_str(&data).context("Failed to parse config")?;
+        config.apply_env_overrides();
         for entry in config.tokens.values_mut() {
             if entry.scope.is_empty() && !entry.all_routes {
                 entry.all_routes = true;
@@ -82,10 +89,64 @@ impl Config {
         Ok(config)
     }
 
+    fn apply_env_overrides(&mut self) {
+        if let Ok(url) = std::env::var("GATEWAY_URL") {
+            if !url.trim().is_empty() {
+                self.gateway_url = url;
+            }
+        }
+        if let Ok(token) = std::env::var("GATE_ADMIN_TOKEN") {
+            if !token.trim().is_empty() {
+                self.admin_token = Some(token);
+            }
+        }
+    }
+
     pub fn save(&self) -> Result<()> {
         let path = Self::path();
         let data = toml::to_string_pretty(self)?;
         write_secret_file(&path, data)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+    use crate::test_support::with_temp_config_root;
+
+    #[test]
+    fn load_creates_default_config_when_missing() {
+        with_temp_config_root(|temp| {
+            let config = Config::load().unwrap();
+
+            assert_eq!(config.gateway_url, "https://localhost");
+            assert!(config.admin_token.is_none());
+            assert!(config.tokens.is_empty());
+
+            let path = temp.path().join(".config/gate/config.toml");
+            let contents = std::fs::read_to_string(path).unwrap();
+            assert!(contents.contains("gateway_url = \"https://localhost\""));
+        });
+    }
+
+    #[test]
+    fn load_applies_env_overrides() {
+        with_temp_config_root(|_temp| {
+            let config = Config {
+                gateway_url: "https://from-file.example".to_string(),
+                ..Config::default()
+            };
+            config.save().unwrap();
+
+            std::env::set_var("GATEWAY_URL", "https://from-env.example");
+            std::env::set_var("GATE_ADMIN_TOKEN", "env-admin");
+            let loaded = Config::load().unwrap();
+            std::env::remove_var("GATEWAY_URL");
+            std::env::remove_var("GATE_ADMIN_TOKEN");
+
+            assert_eq!(loaded.gateway_url, "https://from-env.example");
+            assert_eq!(loaded.admin_token.as_deref(), Some("env-admin"));
+        });
     }
 }

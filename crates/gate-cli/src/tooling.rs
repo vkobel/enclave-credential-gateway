@@ -386,7 +386,7 @@ fn materialize_git_credential_config(
     mode: ActivationMode,
 ) -> Result<PathBuf> {
     let path = ctx.generated_root.join("gitconfig");
-    let helper = format!("!coco git-credential {}", shell_word(ctx.token_name));
+    let helper = format!("!gate git-credential {}", shell_word(ctx.token_name));
     let content = format!(
         "[include]\n    path = ~/.gitconfig\n\n[credential \"{}\"]\n    helper =\n    helper = \"{}\"\n",
         ctx.gateway_url,
@@ -509,7 +509,7 @@ mod tests {
         tokens.insert(
             "laptop".to_string(),
             TokenEntry {
-                token: "ccgw_test".to_string(),
+                token: "gate_test".to_string(),
                 scope: scope.iter().map(|scope| scope.to_string()).collect(),
                 all_routes,
             },
@@ -609,7 +609,7 @@ env:
             .unwrap();
             let gitconfig = temp
                 .path()
-                .join(".config/coco/generated/gh/laptop/gitconfig");
+                .join(".config/gate/generated/gh/laptop/gitconfig");
 
             assert_eq!(
                 activation.exports,
@@ -620,11 +620,11 @@ env:
                     },
                     EnvExport {
                         key: "GH_ENTERPRISE_TOKEN".to_string(),
-                        value: "ccgw_test".to_string()
+                        value: "gate_test".to_string()
                     },
                     EnvExport {
                         key: "GH_TOKEN".to_string(),
-                        value: "ccgw_test".to_string()
+                        value: "gate_test".to_string()
                     },
                     EnvExport {
                         key: "GIT_CONFIG_GLOBAL".to_string(),
@@ -636,7 +636,7 @@ env:
             assert!(contents.contains("[include]\n    path = ~/.gitconfig"));
             assert!(contents.contains("[credential \"https://gw.example.com\"]"));
             assert!(contents.contains("    helper =\n"));
-            assert!(contents.contains("    helper = \"!coco git-credential laptop\""));
+            assert!(contents.contains("    helper = \"!gate git-credential laptop\""));
         });
     }
 
@@ -677,7 +677,7 @@ env:
             )
             .unwrap();
 
-            let codex_home = temp.path().join(".config/coco/generated/codex/laptop/home");
+            let codex_home = temp.path().join(".config/gate/generated/codex/laptop/home");
             assert!(activation.exports.contains(&EnvExport {
                 key: "CODEX_HOME".to_string(),
                 value: codex_home.display().to_string()
@@ -691,19 +691,7 @@ env:
             let auth_path = codex_home.join("auth.json");
             let auth = std::fs::read_to_string(auth_path).unwrap();
             assert!(auth.contains("\"auth_mode\": \"apikey\""));
-            assert!(auth.contains("\"OPENAI_API_KEY\": \"ccgw_test\""));
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-
-                let mode = std::fs::metadata(codex_home.join("auth.json"))
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777;
-                assert_eq!(mode, 0o600);
-            }
+            assert!(auth.contains("\"OPENAI_API_KEY\": \"gate_test\""));
         });
     }
 

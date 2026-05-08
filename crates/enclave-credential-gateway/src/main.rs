@@ -1,12 +1,12 @@
-//! CoCo Credential Gateway — startup and router assembly.
+//! Enclave Credential Gateway — startup and router assembly.
 
-use coco_gateway::admin::admin_router;
-use coco_gateway::auth::auth_middleware;
-use coco_gateway::health::health_handler;
-use coco_gateway::profile::load_profile;
-use coco_gateway::proxy::proxy_handler;
-use coco_gateway::registry::TokenRegistry;
-use coco_gateway::AppState;
+use enclave_credential_gateway::admin::admin_router;
+use enclave_credential_gateway::auth::auth_middleware;
+use enclave_credential_gateway::health::health_handler;
+use enclave_credential_gateway::profile::load_profile;
+use enclave_credential_gateway::proxy::proxy_handler;
+use enclave_credential_gateway::registry::TokenRegistry;
+use enclave_credential_gateway::AppState;
 
 use axum::{middleware, routing::get, Router};
 use hyper_rustls::HttpsConnectorBuilder;
@@ -30,35 +30,35 @@ async fn main() {
         .init();
 
     // Admin token is always required
-    let admin_token = match std::env::var("COCO_ADMIN_TOKEN") {
+    let admin_token = match std::env::var("GATE_ADMIN_TOKEN") {
         Ok(t) if !t.is_empty() => Zeroizing::new(t),
         Ok(_) => {
-            error!("COCO_ADMIN_TOKEN is set but empty — refusing to start");
+            error!("GATE_ADMIN_TOKEN is set but empty — refusing to start");
             std::process::exit(1);
         }
         Err(_) => {
-            error!("COCO_ADMIN_TOKEN is not set — refusing to start");
+            error!("GATE_ADMIN_TOKEN is not set — refusing to start");
             std::process::exit(1);
         }
     };
 
     // Phantom token is optional if a registry is configured
-    let phantom_token = match std::env::var("COCO_PHANTOM_TOKEN") {
+    let phantom_token = match std::env::var("GATE_PHANTOM_TOKEN") {
         Ok(t) if !t.is_empty() => Some(Zeroizing::new(t)),
         Ok(_) => {
-            error!("COCO_PHANTOM_TOKEN is set but empty");
+            error!("GATE_PHANTOM_TOKEN is set but empty");
             std::process::exit(1);
         }
         Err(_) => None,
     };
 
     // Load token registry if configured
-    let tokens_path = std::env::var("COCO_TOKENS_FILE")
+    let tokens_path = std::env::var("GATE_TOKENS_FILE")
         .ok()
         .unwrap_or_else(|| "./tokens.json".to_string());
     let tokens_pathbuf = PathBuf::from(&tokens_path);
 
-    let token_registry = if tokens_pathbuf.exists() || std::env::var("COCO_TOKENS_FILE").is_ok() {
+    let token_registry = if tokens_pathbuf.exists() || std::env::var("GATE_TOKENS_FILE").is_ok() {
         match TokenRegistry::load_or_create(tokens_pathbuf).await {
             Ok(reg) => {
                 info!("Token registry loaded from {}", tokens_path);
@@ -75,11 +75,11 @@ async fn main() {
 
     // Require at least one auth method
     if phantom_token.is_none() && token_registry.is_none() {
-        error!("Neither COCO_PHANTOM_TOKEN nor token registry configured — refusing to start");
+        error!("Neither GATE_PHANTOM_TOKEN nor token registry configured — refusing to start");
         std::process::exit(1);
     }
 
-    let port: u16 = std::env::var("COCO_LISTEN_PORT")
+    let port: u16 = std::env::var("GATE_LISTEN_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(8080);
@@ -128,6 +128,6 @@ async fn main() {
             std::process::exit(1);
         });
 
-    info!("coco-gateway listening on {}", addr);
+    info!("enclave-credential-gateway listening on {}", addr);
     axum::serve(listener, app).await.expect("server error");
 }
