@@ -83,7 +83,10 @@ The v1 release process should make the binary-to-source link independently check
 - Publish GHCR image digests and derived MRTD values.
 - Add a reproduction script that rebuilds a release image and prints comparable proof material.
 
-The current `Dockerfile` is a development/deployment scaffold, not yet the reproducible release pipeline described here.
+The current `Dockerfile` is a development/deployment scaffold. `Containerfile.stagex`
+and `scripts/build-stagex-oci.sh` are the first reproducible OCI build scaffold,
+but the full release pipeline still needs published image digests, MRTD material,
+and verification tooling.
 
 ### R3 - Sealed Credential Storage
 
@@ -146,7 +149,9 @@ source commit
     -> gate verify
 ```
 
-The current repo has the source and Cargo lockfile pieces. The pinned toolchain, release workflow, reproduction script, and MRTD publication are roadmap work.
+The current repo has the source, Cargo lockfile, and StageX OCI build scaffold
+pieces. A full release workflow, published golden digests, MRTD publication, and
+`gate verify --reproduce` integration are still roadmap work.
 
 ---
 

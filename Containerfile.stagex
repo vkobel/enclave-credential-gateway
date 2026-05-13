@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+
+# Pinned linux/amd64 StageX Rust pallet digest, selected 2026-05-13 from:
+# https://stagex.tools/packages/pallet/rust/
+FROM stagex/pallet-rust@sha256:2fbe7b164dd92edb9c1096152f6d27592d8a69b1b8eb2fc907b5fadea7d11668 AS build
+
+WORKDIR /src
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY profiles ./profiles
+
+ENV CARGO_TARGET_DIR=/target
+ENV RUSTFLAGS="-C codegen-units=1 -C target-feature=+crt-static -C strip=symbols --remap-path-prefix=/src=. --remap-path-prefix=/target=target"
+
+# Keep dependency resolution and download separate from the offline release build.
+RUN cargo fetch --locked --target "$(uname -m)-unknown-linux-musl"
+
+RUN --network=none <<-'EOF'
+	set -eux
+	arch="$(uname -m)"
+	target="${arch}-unknown-linux-musl"
+
+	cargo build --frozen --release --target "${target}" \
+		-p enclave-credential-gateway \
+		-p gate-cli
+
+	install -Dm755 "/target/${target}/release/enclave-credential-gateway" \
+		/rootfs-server/usr/bin/enclave-credential-gateway
+	install -Dm755 "/target/${target}/release/gate" \
+		/rootfs-cli/usr/bin/gate
+EOF
+
+FROM scratch AS server
+COPY --from=build /rootfs-server/ /
+EXPOSE 8080
+ENTRYPOINT ["/usr/bin/enclave-credential-gateway"]
+
+FROM scratch AS cli
+COPY --from=build /rootfs-cli/ /
+ENTRYPOINT ["/usr/bin/gate"]

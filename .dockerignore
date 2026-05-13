@@ -1,6 +1,7 @@
 nono/
 .git/
 target/
+dist/
 openspec/
 .claude/
 *.md

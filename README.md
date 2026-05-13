@@ -197,6 +197,22 @@ cargo test --workspace
 
 `test-e2e.sh` exercises the Docker flow: gateway startup, admin API, token validation, scope enforcement, revocation, and CLI activation. Live upstream checks are skipped when credentials are not set.
 
+## Reproducible OCI Builds
+
+```bash
+./scripts/build-stagex-oci.sh
+shasum -a 256 dist/coco-credential-gateway-*.oci.tar
+```
+
+Expected current linux/amd64 StageX OCI tarball hashes:
+
+```text
+8d9bd084422e4638acf6bcd355da5c5e8eaa2f562875488f95f728f6376851ee  dist/coco-credential-gateway-server.oci.tar
+83f0ddd4d907349d48225970e01be664a80c49727a634e6e2e7ed1fd3634239c  dist/coco-credential-gateway-cli.oci.tar
+```
+
+See [docs/BUILDING.md](./docs/BUILDING.md) for the StageX build and no-cache reproduction checks.
+
 ---
 
 ## Docs
@@ -204,5 +220,6 @@ cargo test --workspace
 - [spec/vision.md](./spec/vision.md) - product vision and long-term direction
 - [spec/roadmap.md](./spec/roadmap.md) - current status and next implementation milestones
 - [docs/USING.md](./docs/USING.md) - detailed per-tool setup for Claude Code, Codex, and `gh`
+- [docs/BUILDING.md](./docs/BUILDING.md) - StageX OCI image build instructions
 - [spec/tee-security.md](./spec/tee-security.md) - target TEE security requirements and threat model
 - [profiles/README.md](./profiles/README.md) - route and tool profile format
