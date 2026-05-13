@@ -47,8 +47,10 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, mut req: Request<
         Some(r) => r,
         None => {
             warn!(
-                "No credential available for route '{}'",
-                entry.canonical_route
+                method = %method,
+                path = %path,
+                canonical_route = %entry.canonical_route,
+                "no upstream credential available"
             );
             return (StatusCode::SERVICE_UNAVAILABLE, "503 Service Unavailable").into_response();
         }
@@ -71,10 +73,30 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, mut req: Request<
         }
     };
 
+    // For UrlPath mode the credential is embedded in the URL; use a redacted
+    // form for all log output so real keys never appear in the log stream.
+    let log_url = match &entry.inject_mode {
+        InjectMode::UrlPath => {
+            let pfx = entry.url_path_prefix.as_deref().unwrap_or("");
+            format!(
+                "{}{}[REDACTED]{}{}",
+                entry.upstream, pfx, upstream_path, query
+            )
+        }
+        InjectMode::Header => upstream_url.clone(),
+    };
+
     let upstream_uri: Uri = match upstream_url.parse() {
         Ok(u) => u,
         Err(e) => {
-            error!("Failed to parse upstream URI {}: {}", upstream_url, e);
+            error!(
+                method = %method,
+                path = %path,
+                canonical_route = %entry.canonical_route,
+                upstream = %log_url,
+                error = %e,
+                "failed to parse upstream URI"
+            );
             return StatusCode::BAD_GATEWAY.into_response();
         }
     };
@@ -125,7 +147,13 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, mut req: Request<
     let upstream_req = match upstream_req.body(body) {
         Ok(r) => r,
         Err(e) => {
-            error!("Failed to build upstream request: {}", e);
+            error!(
+                method = %method,
+                path = %path,
+                canonical_route = %entry.canonical_route,
+                error = %e,
+                "failed to build upstream request"
+            );
             return StatusCode::BAD_GATEWAY.into_response();
         }
     };
@@ -133,7 +161,14 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, mut req: Request<
     match state.https_client.request(upstream_req).await {
         Ok(resp) => {
             let status = resp.status();
-            info!("{} {} → {} [{}]", method, path, upstream_url, status);
+            info!(
+                method = %method,
+                path = %path,
+                canonical_route = %entry.canonical_route,
+                upstream = %log_url,
+                status = status.as_u16(),
+                "upstream response"
+            );
 
             if status == StatusCode::SWITCHING_PROTOCOLS {
                 if let Some(client_upgrade) = client_upgrade {
@@ -149,7 +184,14 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, mut req: Request<
             response
         }
         Err(e) => {
-            error!("Upstream request failed: {}", e);
+            error!(
+                method = %method,
+                path = %path,
+                canonical_route = %entry.canonical_route,
+                upstream = %log_url,
+                error = %e,
+                "upstream request failed"
+            );
             StatusCode::BAD_GATEWAY.into_response()
         }
     }
