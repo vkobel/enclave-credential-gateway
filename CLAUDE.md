@@ -2,7 +2,7 @@
 
 ## What This Project Is
 
-Enclave Credential Gateway is early work toward a TEE-backed credential gateway for AI agents. The current repo contains a working Rust gateway/proxy, phantom token registry, and CLI activation flow. The TEE trust boundary, attestation endpoint, sealed credential store, and verification flow are roadmap work.
+Enclave Credential Gateway is early work toward a TEE-backed credential gateway for AI agents. The current repo contains a working Rust gateway/proxy, phantom token registry, CLI activation flow, and reproducible StageX OCI artifacts for the server and CLI. The TEE trust boundary, attestation endpoint, sealed credential store, and verification flow are roadmap work.
 
 Clients use scoped phantom tokens (`gate_...`) instead of real API keys. The gateway validates the phantom, checks route scope, removes the client credential, injects the real server-side credential, and forwards upstream.
 
@@ -19,12 +19,14 @@ profiles/
   tools/*.yaml    - Tool-specific activation adapters
 docs/
   USING.md        - Per-tool setup guide for the current implementation
+  BUILDING.md     - StageX OCI build and reproduction guide
 spec/
   vision.md       - Product vision and long-term direction
   roadmap.md      - Current status and next implementation milestones
   tee-security.md - Target TEE threat model and security requirements
 scripts/
   test-e2e.sh     - Docker-backed end-to-end test suite
+  build-stagex-oci.sh - Reproducible StageX OCI artifact builder
 ```
 
 ## Where to Start
@@ -51,4 +53,5 @@ scripts/
 - `GATE_PHANTOM_TOKEN` is a legacy single-token fallback. The registry path is preferred for new work.
 - Current shipped route profiles are `openai`, `anthropic`, and `github`.
 - Routes are embedded at build time from `profiles/routes/*.yaml`; there is no runtime profile loading.
+- StageX reproducible OCI builds are current behavior; TDX measurement publication and `gate verify` consumption are not.
 - TDX attestation, sealed storage, audit log, and `gate verify` are planned features, not current behavior.

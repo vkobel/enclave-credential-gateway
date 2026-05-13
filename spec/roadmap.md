@@ -6,7 +6,7 @@
 |---|---|---|
 | **1a** | Phantom token auth, profile routing, multi-source credential injection | done |
 | **1b** | Docker/Caddy deployment scaffold, token registry, CLI activation | done |
-| **1c** | TDX attestation, CI image publishing, reproducibility groundwork | next |
+| **1c** | StageX reproducible OCI builds done; TDX attestation and CI image publishing next | in progress |
 | **2** | Audit log, token expiry, response redaction, additional route profiles | not started |
 | **3** | Sealed credential store, `gate verify`, deploy polish, v1 release | not started |
 
@@ -14,7 +14,7 @@
 
 ## Release Posture
 
-The current codebase is publishable as a `0.x` preview of the proxy, phantom token, route, and CLI workflow. It should not be described as production TEE-secure or as a v1 security release until the attestation, reproducibility, sealed storage, and verification pieces below are implemented.
+The current codebase is publishable as a `0.x` preview of the proxy, phantom token, route, CLI workflow, and StageX reproducible OCI artifact workflow. It should not be described as production TEE-secure or as a v1 security release until the attestation, sealed storage, published measurement, and verification pieces below are implemented.
 
 Preview releases should be explicit about the trust boundary: today the gateway reduces credential exposure to clients and agents, but it does not yet prevent the host or infrastructure operator from reading upstream credentials. The first public release can be useful for feedback and integration testing, while v1 should be reserved for a gateway that can publish verifiable release artifacts and be checked by `gate verify`.
 
@@ -46,27 +46,39 @@ Preview releases should be explicit about the trust boundary: today the gateway 
 - One YAML file per tool adapter under `profiles/tools/`.
 - Profiles are embedded at build time via `include_str!`.
 
+**Reproducible build groundwork:**
+
+- `Containerfile.stagex` builds server and CLI OCI artifacts through the pinned [StageX](https://codeberg.org/stagex/stagex) Rust pallet.
+- Runtime images are `scratch` images containing only the statically linked binary.
+- The release compile runs after dependency fetch with `--network=none`, `--frozen`, and `--release`.
+- `scripts/build-stagex-oci.sh` exports timestamp-normalized OCI tarballs for both artifacts.
+- `docs/BUILDING.md` and the README publish expected linux/amd64 OCI tarball hashes and reproduction commands.
+- Current linux/amd64 server and CLI OCI tarballs have been verified with byte-for-byte cached and no-cache rebuilds.
+
 ---
 
 ## Phase 1c - TDX Attestation and Release Groundwork
 
 **Goal:** make it possible for a verifier to ask the running gateway what code it is running, then compare that answer to published release artifacts.
 
-Reproducibility groundwork for the server gateway must come before making strong Phala deployment claims. The priority is a pinned, reproducible gateway binary and packaged gateway image that produce published golden digests and measurement material. The `gate` CLI then consumes those materials as the verifier:
+StageX reproducible OCI artifacts are now available for both the server gateway and CLI. The remaining priority before making strong Phala deployment claims is to publish release artifacts, derive measurement material, expose live TDX attestation, and teach `gate` to consume those materials as the verifier:
 
 - `gate verify <gateway-url>` checks live attestation evidence against the published golden measurements.
 - `gate verify --reproduce <gateway-url>` locally rebuilds the server gateway from source with pinned inputs, including a reproducible `cargo build`, and verifies that the reproduced binary/image material matches the published release exactly.
 
-CLI artifact reproducibility is useful release hygiene, but it is secondary to server gateway reproducibility because the server gateway is the code running inside the TEE and handling upstream credentials.
+CLI artifact reproducibility is useful release hygiene and is now covered by the StageX OCI flow. Server gateway measurement still remains the security-critical path because the server gateway is the code running inside the TEE and handling upstream credentials.
 
 The release-hardening items below are tentative and should be refined based on scope, CI complexity, and what `gate verify` needs to consume. Prefer publishing simple, inspectable artifacts first; add heavier supply-chain frameworks when they materially improve verifier trust without obscuring the core TEE measurement story.
 
-- [ ] Pin the Rust toolchain used for release builds.
-- [ ] Pin the gateway base image by digest.
+- [x] Pin the release build environment with a StageX Rust pallet digest.
+- [x] Package the server gateway and CLI as reproducible linux/amd64 OCI tarballs.
+- [x] Publish current expected OCI tarball hashes in README and `docs/BUILDING.md`.
+- [x] Add no-cache reproduction commands that rebuild and compare the StageX OCI artifacts.
+- [ ] Add an explicit arm64 StageX pallet digest before publishing multi-platform artifacts.
 - [ ] Add CI that builds the server gateway binary with locked inputs and records the binary digest as a golden release artifact.
 - [ ] Add CI that packages the gateway binary into a GHCR image and records the image digest and expected measurement material as golden release artifacts.
 - [ ] Evaluate build provenance for release artifacts, such as SLSA provenance or GitHub artifact attestations, if it fits the verification model.
-- [ ] Add a reproduction script that locally rebuilds the server gateway release and verifies that the reproduced binary/image proof material matches the published golden artifacts.
+- [ ] Extend the reproduction script to automatically compare rebuilt artifacts against published golden artifacts.
 - [ ] Add CI/release coverage for the `gate` CLI artifact with locked inputs and a published artifact digest after the gateway verification path is defined.
 - [ ] Add unauthenticated `GET /attest`.
 - [ ] Fetch a TDX QuoteV4 from tappd and return the quote as hex JSON.

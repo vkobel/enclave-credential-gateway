@@ -14,7 +14,7 @@ docs/                  — Operational docs for the current state of the project
 spec/                  — Vision, roadmap, and implementation specs
 ```
 
-Current shipped route profiles are `openai`, `anthropic`, and `github`. TDX attestation, sealed credential storage, audit log, and `gate verify` are roadmap work, not current behavior.
+Current shipped route profiles are `openai`, `anthropic`, and `github`. Reproducible server and CLI OCI artifacts through StageX are current behavior. TDX attestation, sealed credential storage, audit log, MRTD publication, and `gate verify` are roadmap work, not current behavior.
 
 ## Development Rules
 

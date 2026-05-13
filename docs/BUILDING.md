@@ -7,10 +7,10 @@
 - `server` target: `/usr/bin/enclave-credential-gateway`
 - `cli` target: `/usr/bin/gate`
 
-The build stage uses the pinned linux/amd64 StageX Rust pallet digest documented
-in the Containerfile. The release build runs after `cargo fetch` with
-`--network=none`, `--frozen`, and `--release`. Runtime images are `scratch`
-images containing only the statically linked binary.
+The build stage uses the pinned linux/amd64 [StageX](https://codeberg.org/stagex/stagex)
+Rust pallet digest documented in the Containerfile. The release build runs after
+`cargo fetch` with `--network=none`, `--frozen`, and `--release`. Runtime images
+are `scratch` images containing only the statically linked binary.
 
 ```bash
 ./scripts/build-stagex-oci.sh

@@ -1,6 +1,6 @@
 # Enclave Credential Gateway - Vision
 
-> Status: this is the product vision and target architecture. The current repository has a working proxy, phantom token registry, and CLI activation flow. TDX attestation, sealed credential storage, audit logging, and several route profiles described here are roadmap work.
+> Status: this is the product vision and target architecture. The current repository has a working proxy, phantom token registry, CLI activation flow, and reproducible StageX OCI artifacts for the server and CLI. TDX attestation, sealed credential storage, audit logging, `gate verify`, and several route profiles described here are roadmap work.
 
 ## What this is
 

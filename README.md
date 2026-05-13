@@ -1,6 +1,6 @@
 # Enclave Credential Gateway
 
-**Status: alpha / early implementation.** Enclave Credential Gateway is early work toward a TEE-backed credential gateway for AI agents. The working gateway already lets clients use scoped phantom tokens (`gate_...`) instead of real vendor keys, but the TEE trust boundary, attestation flow, sealed credential storage, and reproducible release verification are not implemented yet.
+**Status: alpha / early implementation.** Enclave Credential Gateway is early work toward a TEE-backed credential gateway for AI agents. The working gateway already lets clients use scoped phantom tokens (`gate_...`) instead of real vendor keys, and the server/CLI can be rebuilt as byte-for-byte reproducible StageX OCI artifacts. The TEE trust boundary, attestation flow, sealed credential storage, and live release verification are not implemented yet.
 
 **Core idea:** credentials should be infrastructure, not agent state.
 
@@ -33,9 +33,10 @@ This repo is an early work in progress. The proxy, token registry, and CLI are u
 - **Admin API** - `POST /admin/tokens`, `GET /admin/tokens`, `DELETE /admin/tokens/:id`, protected by `GATE_ADMIN_TOKEN`.
 - **CLI** - `gate admin token ...` for gateway administration, plus `gate activate` and `gate git-credential` for local tool setup.
 - **Tool activation** - generated config/env for `gh`, Codex, and Claude Code.
+- **Reproducible OCI artifacts** - server and CLI images build through [StageX](https://codeberg.org/stagex/stagex) with pinned build inputs, offline `cargo build --frozen --release`, timestamp-normalized OCI exports, documented expected hashes, and verified byte-for-byte no-cache rebuilds. See [docs/BUILDING.md](./docs/BUILDING.md).
 - **Deployment scaffold** - Docker Compose with Caddy TLS and optional `GATE_DOMAIN`.
 
-**Not implemented yet:** TDX attestation (`GET /attest`), reproducible build/MRTD verification, sealed credential storage, audit log, token expiry, and additional route profiles beyond OpenAI, Anthropic, and GitHub.
+**Not implemented yet:** TDX attestation (`GET /attest`), MRTD publication and live enclave verification, sealed credential storage, audit log, token expiry, and additional route profiles beyond OpenAI, Anthropic, and GitHub.
 
 See [spec/roadmap.md](./spec/roadmap.md) for the implementation plan.
 

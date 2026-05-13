@@ -13,12 +13,13 @@ Working today:
 - Phantom token registry stored as Blake3 token hashes in `tokens.json`.
 - Per-token scope enforcement before credential resolution.
 - Admin API protected by `GATE_ADMIN_TOKEN`, compared constant-time in memory.
+- Reproducible server and CLI OCI artifacts built through the pinned [StageX](https://codeberg.org/stagex/stagex) Rust pallet, with documented current hashes and verified byte-for-byte no-cache rebuilds.
 - Docker Compose + Caddy deployment scaffold.
 
 Not implemented yet:
 
 - `GET /attest` and client-side quote verification.
-- Pinned reproducible release pipeline and MRTD publication.
+- CI release publishing, published golden artifacts, and MRTD publication.
 - Sealed or encrypted credential store.
 - Phala KMS key release integration.
 - Audit log, credential redaction, and token expiry.
@@ -83,10 +84,11 @@ The v1 release process should make the binary-to-source link independently check
 - Publish GHCR image digests and derived MRTD values.
 - Add a reproduction script that rebuilds a release image and prints comparable proof material.
 
-The current `Dockerfile` is a development/deployment scaffold. `Containerfile.stagex`
-and `scripts/build-stagex-oci.sh` are the first reproducible OCI build scaffold,
-but the full release pipeline still needs published image digests, MRTD material,
-and verification tooling.
+The current `Dockerfile` is a development/deployment scaffold. The StageX path
+in `Containerfile.stagex` and `scripts/build-stagex-oci.sh` already produces
+byte-for-byte reproducible linux/amd64 OCI tarballs for the server and CLI. The
+full TEE release pipeline still needs CI-published golden artifacts, MRTD
+material, and verification tooling.
 
 ### R3 - Sealed Credential Storage
 
@@ -140,18 +142,18 @@ Owner-direct injection means the credential owner's device verifies the enclave 
 
 ```text
 source commit
-    -> pinned Rust toolchain + Cargo.lock
-    -> locked release build
-    -> pinned Docker base image
-    -> GHCR image digest
+    -> pinned StageX Rust pallet + Cargo.lock
+    -> locked offline release build
+    -> reproducible OCI artifact
+    -> published release image digest
     -> Phala CVM launch
     -> published MRTD
     -> gate verify
 ```
 
-The current repo has the source, Cargo lockfile, and StageX OCI build scaffold
-pieces. A full release workflow, published golden digests, MRTD publication, and
-`gate verify --reproduce` integration are still roadmap work.
+The current repo has the source, Cargo lockfile, and reproducible StageX OCI
+artifact pieces. A full CI release workflow, published golden digests, MRTD
+publication, and `gate verify --reproduce` integration are still roadmap work.
 
 ---
 
