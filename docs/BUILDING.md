@@ -26,30 +26,33 @@ dist/coco-credential-gateway-cli.oci.tar
 Current expected linux/amd64 OCI tarball hashes:
 
 ```text
-8d9bd084422e4638acf6bcd355da5c5e8eaa2f562875488f95f728f6376851ee  dist/coco-credential-gateway-server.oci.tar
-83f0ddd4d907349d48225970e01be664a80c49727a634e6e2e7ed1fd3634239c  dist/coco-credential-gateway-cli.oci.tar
+# Run after building to update these:
+# shasum -a 256 dist/*.oci.tar
 ```
 
-These are the SHA256 hashes of the exported OCI tar files. The OCI manifest
-digests inside those tarballs are:
+Hashes are tied to the git commit timestamp used as `SOURCE_DATE_EPOCH`.
+Regenerate after any source or dependency change, then commit alongside the code.
 
-```text
-sha256:d7db14622236e4d440e8cb0ad270a213e52f54b233785daa0b6ad042d7318272  server
-sha256:c590c5f3fc5fea34f2867197733490d1adf004000e934eb63594a7466ce36441  cli
+The OCI manifest digests inside the tarballs can be extracted with:
+
+```bash
+tar -xOf dist/coco-credential-gateway-server.oci.tar manifest.json | python3 -m json.tool
 ```
 
-The script sets `SOURCE_DATE_EPOCH=0` unless overridden and asks BuildKit to
-rewrite image layer timestamps to that value:
+The script defaults `SOURCE_DATE_EPOCH` to the latest git commit timestamp
+(`git log -1 --pretty=%ct`) so any two builds from the same commit produce
+identical artifacts. Override it explicitly if needed:
 
 ```bash
 SOURCE_DATE_EPOCH=0 TARGET_PLATFORM=linux/amd64 OUTPUT_DIR=dist IMAGE_PREFIX=coco-credential-gateway \
   ./scripts/build-stagex-oci.sh
 ```
 
-To build one target manually:
+To build one target manually (pass the git commit epoch explicitly so the value
+is unambiguous):
 
 ```bash
-SOURCE_DATE_EPOCH=0 docker buildx build \
+SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct) docker buildx build \
   --platform linux/amd64 \
   --target server \
   --output type=oci,dest=dist/coco-credential-gateway-server.oci.tar,rewrite-timestamp=true \
@@ -72,14 +75,14 @@ compiles both binaries, so the CLI target can then be exported from that rebuilt
 layer:
 
 ```bash
-SOURCE_DATE_EPOCH=0 docker buildx build \
+SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct) docker buildx build \
   --no-cache \
   --platform linux/amd64 \
   --target server \
   --output type=oci,dest=/tmp/coco-stagex-repro/coco-credential-gateway-server.oci.tar,rewrite-timestamp=true \
   -f Containerfile.stagex .
 
-SOURCE_DATE_EPOCH=0 docker buildx build \
+SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct) docker buildx build \
   --platform linux/amd64 \
   --target cli \
   --output type=oci,dest=/tmp/coco-stagex-repro/coco-credential-gateway-cli.oci.tar,rewrite-timestamp=true \

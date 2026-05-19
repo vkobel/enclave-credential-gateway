@@ -4,7 +4,7 @@ set -eu
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 IMAGE_PREFIX="${IMAGE_PREFIX:-coco-credential-gateway}"
 OUTPUT_DIR="${OUTPUT_DIR:-${ROOT}/dist}"
-SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
+SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --pretty=%ct 2>/dev/null || echo 0)}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-linux/amd64}"
 
 case "$OUTPUT_DIR" in
