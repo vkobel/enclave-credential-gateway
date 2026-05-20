@@ -23,15 +23,20 @@ dist/coco-credential-gateway-server.oci.tar
 dist/coco-credential-gateway-cli.oci.tar
 ```
 
-Current expected linux/amd64 OCI tarball hashes:
+After every build the script prints the hashes, the exact command used to
+produce them, and writes a per-commit sums file to the tracked `checksums/`
+directory:
 
 ```text
-# Run after building to update these:
-# shasum -a 256 dist/*.oci.tar
+checksums/sha256sums-<gitrev>.txt
 ```
 
-Hashes are tied to the git commit timestamp used as `SOURCE_DATE_EPOCH`.
-Regenerate after any source or dependency change, then commit alongside the code.
+Commit that file alongside the source change so the expected hashes travel
+with the code. To verify a later rebuild against committed hashes:
+
+```bash
+(cd dist && shasum -a 256 -c ../checksums/sha256sums-<gitrev>.txt)
+```
 
 The OCI manifest digests inside the tarballs can be extracted with:
 
