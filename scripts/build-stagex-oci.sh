@@ -27,11 +27,22 @@ esac
 
 mkdir -p "$OUTPUT_DIR"
 
+# Build from scratch by default. A cached layer keeps the rewritten timestamps
+# from the epoch it was first built at, so reusing it can emit a stale artifact
+# hash that a clean third-party reproduction will not match. ALLOW_CACHE=1 trades
+# that guarantee for speed during local iteration.
+if [ "${ALLOW_CACHE:-}" = 1 ]; then
+	CACHE_FLAG=
+else
+	CACHE_FLAG=--no-cache
+fi
+
 build_file() {
 	file="$1"
 	name="$2"
 
 	SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" docker buildx build \
+		$CACHE_FLAG \
 		--platform "$TARGET_PLATFORM" \
 		--output "type=oci,dest=${OUTPUT_DIR}/${name}.oci.tar,rewrite-timestamp=true" \
 		-f "$ROOT/$file" \
