@@ -32,11 +32,32 @@ checksums/sha256sums-<gitrev>.txt
 ```
 
 Commit that file alongside the source change so the expected hashes travel
-with the code. To verify a later rebuild against committed hashes:
+with the code.
+
+### Reproducing and verifying a specific commit
+
+Artifacts are pinned to the build commit: the script sets `SOURCE_DATE_EPOCH`
+to that commit's timestamp, so every commit produces a distinct but
+deterministic artifact. To reproduce, check out the **exact commit** named in
+the checksum file and rebuild — the default epoch then matches automatically:
+
+```bash
+git checkout <gitrev>
+./scripts/build-stagex-oci.sh --check
+```
+
+`--check` rebuilds and compares against the committed
+`checksums/sha256sums-<gitrev>.txt`, exiting non-zero on any mismatch. You can
+also verify an existing `dist/` build directly:
 
 ```bash
 (cd dist && shasum -a 256 -c ../checksums/sha256sums-<gitrev>.txt)
 ```
+
+Reproduce from the source commit, not the repository tip: a follow-up commit
+that only records checksums still gets a new timestamp, and therefore a
+different artifact. Tag the commits you publish (`git tag`) so released
+artifacts have a stable pointer to reproduce from.
 
 The OCI manifest digests inside the tarballs can be extracted with:
 
