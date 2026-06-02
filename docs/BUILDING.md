@@ -23,6 +23,15 @@ are `scratch` images containing only the statically linked binary.
 ./scripts/build-stagex-oci.sh
 ```
 
+The script runs with `--no-cache` by default so every invocation produces a
+clean, reproducible artifact. Set `ALLOW_CACHE=1` to reuse cached layers during
+local iteration (faster, but may emit a stale hash that a clean reproduction
+won't match):
+
+```bash
+ALLOW_CACHE=1 ./scripts/build-stagex-oci.sh
+```
+
 By default, this writes:
 
 ```text
@@ -100,23 +109,6 @@ separate directory and compare bytes:
 OUTPUT_DIR=/tmp/coco-stagex-repro ./scripts/build-stagex-oci.sh
 cmp -s dist/coco-credential-gateway-server.oci.tar /tmp/coco-stagex-repro/coco-credential-gateway-server.oci.tar
 cmp -s dist/coco-credential-gateway-cli.oci.tar /tmp/coco-stagex-repro/coco-credential-gateway-cli.oci.tar
-```
-
-For a stronger check, force a no-cache rebuild of each image. The two files now
-have independent build stages, so each is recompiled from scratch:
-
-```bash
-SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct) docker buildx build \
-  --no-cache \
-  --platform linux/amd64 \
-  --output type=oci,dest=/tmp/coco-stagex-repro/coco-credential-gateway-server.oci.tar,rewrite-timestamp=true \
-  -f Containerfile.stagex .
-
-SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct) docker buildx build \
-  --no-cache \
-  --platform linux/amd64 \
-  --output type=oci,dest=/tmp/coco-stagex-repro/coco-credential-gateway-cli.oci.tar,rewrite-timestamp=true \
-  -f Containerfile.cli.stagex .
 ```
 
 Then compare the tarballs with `cmp` or `shasum -a 256`.
