@@ -200,19 +200,18 @@ cargo test --workspace
 
 ## Reproducible OCI Builds
 
+Build both StageX OCI artifacts — the server (`Containerfile.stagex`, the enclave
+image) and the `gate` CLI (`Containerfile.cli.stagex`):
+
 ```bash
-./scripts/build-stagex-oci.sh
-shasum -a 256 dist/coco-credential-gateway-*.oci.tar
+./scripts/build-stagex-oci.sh          # writes dist/ and records checksums/sha256sums-<rev>.txt
+./scripts/build-stagex-oci.sh --check  # rebuild and verify against the committed checksums
 ```
 
-Expected current linux/amd64 StageX OCI tarball hashes:
-
-```text
-8d9bd084422e4638acf6bcd355da5c5e8eaa2f562875488f95f728f6376851ee  dist/coco-credential-gateway-server.oci.tar
-83f0ddd4d907349d48225970e01be664a80c49727a634e6e2e7ed1fd3634239c  dist/coco-credential-gateway-cli.oci.tar
-```
-
-See [docs/BUILDING.md](./docs/BUILDING.md) for the StageX build and no-cache reproduction checks.
+Expected hashes are committed per build commit in
+[`checksums/`](./checksums), not duplicated here. See
+[docs/BUILDING.md](./docs/BUILDING.md) for the full StageX build, per-commit
+reproduction, and no-cache verification.
 
 ---
 
