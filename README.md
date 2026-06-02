@@ -201,17 +201,28 @@ cargo test --workspace
 ## Reproducible OCI Builds
 
 Build both StageX OCI artifacts — the server (`Containerfile.stagex`, the enclave
-image) and the `gate` CLI (`Containerfile.cli.stagex`):
+image) and the `gate` CLI (`Containerfile.cli.stagex`). Builds are `--no-cache`
+and pinned to the commit timestamp, so any two builds of a commit are
+byte-for-byte identical.
+
+Certify and publish a release:
 
 ```bash
-./scripts/build-stagex-oci.sh           # build dist/ and print the hashes
-./scripts/build-stagex-oci.sh --tag v0.1.0   # certify: record hashes in an annotated tag
-./scripts/build-stagex-oci.sh --check   # rebuild and verify against the tag on HEAD
+./scripts/build-stagex-oci.sh --tag v0.1.0   # build dist/ and record hashes in an annotated git tag
+git push origin v0.1.0                        # publish the tag
 ```
 
-Expected hashes are published on the annotated git tag for each certified
-commit, not in the repo tree. See [docs/BUILDING.md](./docs/BUILDING.md) for the
-full StageX build and reproduction steps.
+Build without tagging, or verify a tagged commit reproduces:
+
+```bash
+./scripts/build-stagex-oci.sh                 # build dist/ and print the hashes
+./scripts/build-stagex-oci.sh --check v0.1.0  # rebuild and verify against the tag's hashes
+git cat-file tag v0.1.0                        # inspect the recorded hashes
+```
+
+Expected hashes live on the annotated git tag for each certified commit, not in
+the repo tree. See [docs/BUILDING.md](./docs/BUILDING.md) for the full StageX
+build and reproduction steps.
 
 ---
 
