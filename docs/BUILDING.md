@@ -8,13 +8,7 @@ Each shipped Rust binary has its own single-target Containerfile:
   only artifact deployed to the enclave)
 - `Containerfile.cli.stagex` → `/usr/bin/gate` (client-side CLI, never deployed)
 
-They are kept separate because Caution deploys the final stage of a Containerfile
-and has no build-target directive — pointing it at a file whose sole output is the
-server removes any ambiguity about what gets measured. Building the server alone
-(`-p enclave-credential-gateway`) also avoids resolver-v2 cross-crate feature
-unification with the CLI, so the enclave binary carries nothing CLI-driven.
-
-Both build stages use the pinned linux/amd64 [StageX](https://codeberg.org/stagex/stagex)
+Caution deploys only the server image. Both build stages use the pinned linux/amd64 [StageX](https://codeberg.org/stagex/stagex)
 Rust pallet digest documented in the Containerfiles. The release build runs after
 `cargo fetch` with `--network=none`, `--frozen`, and `--release`. Runtime images
 are `scratch` images containing only the statically linked binary.
@@ -39,41 +33,27 @@ dist/coco-credential-gateway-server.oci.tar
 dist/coco-credential-gateway-cli.oci.tar
 ```
 
-After every build the script prints the hashes, the exact command used to
-produce them, and writes a per-commit sums file to the tracked `checksums/`
-directory:
-
-```text
-checksums/sha256sums-<gitrev>.txt
-```
-
-Commit that file alongside the source change so the expected hashes travel
-with the code.
-
-### Reproducing and verifying a specific commit
-
-Artifacts are pinned to the build commit: the script sets `SOURCE_DATE_EPOCH`
-to that commit's timestamp, so every commit produces a distinct but
-deterministic artifact. To reproduce, check out the **exact commit** named in
-the checksum file and rebuild — the default epoch then matches automatically:
+The build prints the artifact hashes. To certify a commit, record them in an
+annotated git tag:
 
 ```bash
-git checkout <gitrev>
+./scripts/build-stagex-oci.sh --tag v0.1.0
+git push origin v0.1.0
+```
+
+### Reproducing and verifying a tagged commit
+
+Check out the tag and rebuild; the epoch is the commit's timestamp, so it
+matches automatically:
+
+```bash
+git checkout v0.1.0
 ./scripts/build-stagex-oci.sh --check
 ```
 
-`--check` rebuilds and compares against the committed
-`checksums/sha256sums-<gitrev>.txt`, exiting non-zero on any mismatch. You can
-also verify an existing `dist/` build directly:
-
-```bash
-(cd dist && shasum -a 256 -c ../checksums/sha256sums-<gitrev>.txt)
-```
-
-Reproduce from the source commit, not the repository tip: a follow-up commit
-that only records checksums still gets a new timestamp, and therefore a
-different artifact. Tag the commits you publish (`git tag`) so released
-artifacts have a stable pointer to reproduce from.
+`--check` rebuilds and compares against the hashes on the artifact tag pointing
+at `HEAD` (or pass one with `--check <tag>`), exiting non-zero on any mismatch.
+Inspect the recorded hashes with `git cat-file tag v0.1.0`.
 
 The OCI manifest digests inside the tarballs can be extracted with:
 
@@ -110,8 +90,6 @@ OUTPUT_DIR=/tmp/coco-stagex-repro ./scripts/build-stagex-oci.sh
 cmp -s dist/coco-credential-gateway-server.oci.tar /tmp/coco-stagex-repro/coco-credential-gateway-server.oci.tar
 cmp -s dist/coco-credential-gateway-cli.oci.tar /tmp/coco-stagex-repro/coco-credential-gateway-cli.oci.tar
 ```
-
-Then compare the tarballs with `cmp` or `shasum -a 256`.
 
 linux/amd64 is the only supported reproducible target. The pinned StageX Rust
 pallet (`sha256:2fbe7b…`) is a single-arch amd64 OCI image, not a multi-platform

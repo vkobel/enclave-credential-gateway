@@ -204,14 +204,14 @@ Build both StageX OCI artifacts — the server (`Containerfile.stagex`, the encl
 image) and the `gate` CLI (`Containerfile.cli.stagex`):
 
 ```bash
-./scripts/build-stagex-oci.sh          # writes dist/ and records checksums/sha256sums-<rev>.txt
-./scripts/build-stagex-oci.sh --check  # rebuild and verify against the committed checksums
+./scripts/build-stagex-oci.sh           # build dist/ and print the hashes
+./scripts/build-stagex-oci.sh --tag v0.1.0   # certify: record hashes in an annotated tag
+./scripts/build-stagex-oci.sh --check   # rebuild and verify against the tag on HEAD
 ```
 
-Expected hashes are committed per build commit in
-[`checksums/`](./checksums), not duplicated here. See
-[docs/BUILDING.md](./docs/BUILDING.md) for the full StageX build, per-commit
-reproduction, and no-cache verification.
+Expected hashes are published on the annotated git tag for each certified
+commit, not in the repo tree. See [docs/BUILDING.md](./docs/BUILDING.md) for the
+full StageX build and reproduction steps.
 
 ---
 
