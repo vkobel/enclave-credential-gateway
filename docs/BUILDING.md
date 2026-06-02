@@ -41,6 +41,18 @@ annotated git tag:
 git push origin v0.1.0
 ```
 
+### Continuous verification
+
+Pushing a `v*` tag triggers `.github/workflows/release-verify.yml`. On a clean
+amd64 runner it rebuilds the tagged commit `--no-cache` and runs `--check`
+against the hashes recorded on the tag — an independent reproduction on
+different hardware.
+
+- Pass/fail shows on the tagged commit, the Actions tab, and the README badge.
+- A failed reproduction auto-files an issue labelled `reproducibility`.
+- Only `v*` tags trigger it; don't tag feature branches you don't intend to
+  release.
+
 ### Reproducing and verifying a tagged commit
 
 Check out the tag and rebuild; the epoch is the commit's timestamp, so it

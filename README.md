@@ -1,5 +1,7 @@
 # Enclave Credential Gateway
 
+[![Reproducible build](https://github.com/vkobel/enclave-credential-gateway/actions/workflows/release-verify.yml/badge.svg?event=push)](https://github.com/vkobel/enclave-credential-gateway/actions/workflows/release-verify.yml)
+
 **Status: alpha / early implementation.** Enclave Credential Gateway is early work toward a TEE-backed credential gateway for AI agents. The working gateway already lets clients use scoped phantom tokens (`gate_...`) instead of real vendor keys, and the server/CLI can be rebuilt as byte-for-byte reproducible StageX OCI artifacts. The TEE trust boundary, attestation flow, sealed credential storage, and live release verification are not implemented yet.
 
 **Core idea:** credentials should be infrastructure, not agent state.
