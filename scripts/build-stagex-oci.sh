@@ -6,16 +6,35 @@ IMAGE_PREFIX="${IMAGE_PREFIX:-coco-credential-gateway}"
 OUTPUT_DIR="${OUTPUT_DIR:-${ROOT}/dist}"
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --pretty=%ct 2>/dev/null || echo 0)}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-linux/amd64}"
+HASH_CMD="shasum -a 256"
 
-MODE=record
+usage() {
+	cat >&2 <<-EOF
+	usage: $0 [--tag <name> | --check [tag]]
+
+	  (default)        build both artifacts and print their hashes
+	  --tag <name>     build, then record the hashes in an annotated git tag
+	                   <name> on HEAD (the expected hashes live on the tag, not
+	                   in the repo tree, so no follow-up commit is needed)
+	  --check [tag]    rebuild and verify against the tag's recorded hashes;
+	                   defaults to the artifact-bearing tag pointing at HEAD
+
+	Artifacts are pinned to the build commit via SOURCE_DATE_EPOCH (its
+	committer timestamp). Builds are --no-cache by default; ALLOW_CACHE=1 opts
+	into caching for fast local iteration (not certifiable).
+	EOF
+}
+
+MODE=build
+TAG=
 case "${1:-}" in
-	--check) MODE=check ;;
-	-h|--help)
-		echo "usage: $0 [--check]" >&2
-		echo "  default: build artifacts and record checksums/sha256sums-<gitrev>.txt" >&2
-		echo "  --check: rebuild and verify against the committed checksums for this commit" >&2
-		exit 0
+	--check) MODE=check; TAG="${2:-}" ;;
+	--tag)
+		MODE=tag
+		TAG="${2:-}"
+		[ -n "$TAG" ] || { echo "--tag requires a tag name" >&2; exit 2; }
 		;;
+	-h|--help) usage; exit 0 ;;
 	"") ;;
 	*) echo "unknown argument: $1 (try --help)" >&2; exit 2 ;;
 esac
@@ -54,31 +73,54 @@ build_file Containerfile.stagex     "${IMAGE_PREFIX}-server"
 build_file Containerfile.cli.stagex "${IMAGE_PREFIX}-cli"
 
 GITREV="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-CHECKSUMS_DIR="${ROOT}/checksums"
-SUMS_FILE="${CHECKSUMS_DIR}/sha256sums-${GITREV}.txt"
-HASH_CMD="shasum -a 256"
 
-printf '\nBuilt from commit %s (SOURCE_DATE_EPOCH=%s)\n' "$GITREV" "$SOURCE_DATE_EPOCH"
+# The lines a verifier feeds to `shasum -c`: "<hash>  <artifact>".
+sums() {
+	(cd "$OUTPUT_DIR" && $HASH_CMD \
+		"${IMAGE_PREFIX}-server.oci.tar" \
+		"${IMAGE_PREFIX}-cli.oci.tar")
+}
 
-if [ "$MODE" = check ]; then
-	if [ ! -f "$SUMS_FILE" ]; then
-		printf 'No committed checksums for %s (%s).\n' "$GITREV" "$SUMS_FILE" >&2
-		printf 'This commit was never certified; check out a certified commit or record it first.\n' >&2
+printf '\nBuilt from commit %s (SOURCE_DATE_EPOCH=%s)\n\n' "$GITREV" "$SOURCE_DATE_EPOCH"
+
+case "$MODE" in
+build)
+	sums
+	printf '\nCertify:  %s --tag <name>\n' "$0"
+	printf 'Verify:   %s --check\n' "$0"
+	;;
+
+tag)
+	BODY="$(sums)"
+	git -C "$ROOT" tag -a "$TAG" -m "stagex OCI artifacts ${GITREV}
+
+SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+TARGET_PLATFORM=${TARGET_PLATFORM}
+
+${BODY}"
+	printf 'Tagged %s on %s with:\n\n%s\n\n' "$TAG" "$GITREV" "$BODY"
+	printf 'Push the tag to publish:  git push origin %s\n' "$TAG"
+	;;
+
+check)
+	if [ -z "$TAG" ]; then
+		# Pick the tag at HEAD whose message carries our artifact hashes.
+		for t in $(git -C "$ROOT" tag --points-at HEAD); do
+			if git -C "$ROOT" cat-file tag "$t" 2>/dev/null | grep -q "${IMAGE_PREFIX}-server.oci.tar"; then
+				TAG="$t"; break
+			fi
+		done
+	fi
+	if [ -z "$TAG" ]; then
+		printf 'No artifact tag found on %s. Certify it first: %s --tag <name>\n' "$GITREV" "$0" >&2
 		exit 1
 	fi
-	printf 'Verifying %s against %s\n\n' "$OUTPUT_DIR" "$SUMS_FILE"
-	(cd "$OUTPUT_DIR" && $HASH_CMD -c "$SUMS_FILE")
-	exit $?
-fi
-
-mkdir -p "$CHECKSUMS_DIR"
-
-printf 'Hash command: (cd %s && %s %s-server.oci.tar %s-cli.oci.tar)\n\n' \
-	"$OUTPUT_DIR" "$HASH_CMD" "$IMAGE_PREFIX" "$IMAGE_PREFIX"
-
-(cd "$OUTPUT_DIR" && $HASH_CMD \
-	"${IMAGE_PREFIX}-server.oci.tar" \
-	"${IMAGE_PREFIX}-cli.oci.tar") | tee "$SUMS_FILE"
-
-printf '\nWritten to: %s\n' "$SUMS_FILE"
-printf 'Verify:     %s --check   (or: cd %s && %s -c %s)\n' "$0" "$OUTPUT_DIR" "$HASH_CMD" "$(basename "$SUMS_FILE")"
+	EXPECTED="$(git -C "$ROOT" cat-file tag "$TAG" | grep -E '\.oci\.tar$' || true)"
+	if [ -z "$EXPECTED" ]; then
+		printf 'Tag %s carries no artifact hashes.\n' "$TAG" >&2
+		exit 1
+	fi
+	printf 'Verifying %s against tag %s\n\n' "$OUTPUT_DIR" "$TAG"
+	printf '%s\n' "$EXPECTED" | (cd "$OUTPUT_DIR" && $HASH_CMD -c -)
+	;;
+esac
