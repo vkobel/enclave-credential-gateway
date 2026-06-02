@@ -20,6 +20,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # checkout leaves the pushed tag as a peeled ref to the commit; re-fetch
+      # the annotated tag object so `git cat-file tag` can read the hashes.
+      - name: Restore annotated tag object
+        run: git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
