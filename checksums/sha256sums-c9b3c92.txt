@@ -1,0 +1,2 @@
+7f74521951ce6dffe9bf0d6ac594577a6af17f862d63f7566d162576b322dad5  coco-credential-gateway-server.oci.tar
+58b3349e89f8b8da439508deef36c1de307ad0c881c3f844687c52f210ab4ea4  coco-credential-gateway-cli.oci.tar
