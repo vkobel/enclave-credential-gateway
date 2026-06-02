@@ -8,13 +8,7 @@ Each shipped Rust binary has its own single-target Containerfile:
   only artifact deployed to the enclave)
 - `Containerfile.cli.stagex` → `/usr/bin/gate` (client-side CLI, never deployed)
 
-They are kept separate because Caution deploys the final stage of a Containerfile
-and has no build-target directive — pointing it at a file whose sole output is the
-server removes any ambiguity about what gets measured. Building the server alone
-(`-p enclave-credential-gateway`) also avoids resolver-v2 cross-crate feature
-unification with the CLI, so the enclave binary carries nothing CLI-driven.
-
-Both build stages use the pinned linux/amd64 [StageX](https://codeberg.org/stagex/stagex)
+Caution deploys only the server image. Both build stages use the pinned linux/amd64 [StageX](https://codeberg.org/stagex/stagex)
 Rust pallet digest documented in the Containerfiles. The release build runs after
 `cargo fetch` with `--network=none`, `--frozen`, and `--release`. Runtime images
 are `scratch` images containing only the statically linked binary.
@@ -96,8 +90,6 @@ OUTPUT_DIR=/tmp/coco-stagex-repro ./scripts/build-stagex-oci.sh
 cmp -s dist/coco-credential-gateway-server.oci.tar /tmp/coco-stagex-repro/coco-credential-gateway-server.oci.tar
 cmp -s dist/coco-credential-gateway-cli.oci.tar /tmp/coco-stagex-repro/coco-credential-gateway-cli.oci.tar
 ```
-
-Then compare the tarballs with `cmp` or `shasum -a 256`.
 
 linux/amd64 is the only supported reproducible target. The pinned StageX Rust
 pallet (`sha256:2fbe7b…`) is a single-arch amd64 OCI image, not a multi-platform
