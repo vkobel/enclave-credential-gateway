@@ -54,4 +54,5 @@ scripts/
 - Current shipped route profiles are `openai`, `anthropic`, and `github`.
 - Routes are embedded at build time from `profiles/routes/*.yaml`; there is no runtime profile loading.
 - StageX reproducible OCI builds are current behavior; TDX measurement publication and `gate verify` consumption are not.
+- The server (`Containerfile.stagex`) and CLI (`Containerfile.cli.stagex`) build from separate single-target files. Only the server is the Caution/enclave artifact; build the server alone (no co-build with the CLI) so its measured bytes stay stable. `Procfile` deploys it.
 - TDX attestation, sealed storage, audit log, and `gate verify` are planned features, not current behavior.
