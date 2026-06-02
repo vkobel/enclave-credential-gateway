@@ -96,6 +96,13 @@ SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct) docker buildx build \
 
 Then compare the tarballs with `cmp` or `shasum -a 256`.
 
-The build currently targets linux/amd64 because the StageX Rust pallet reference
-is pinned to a linux/amd64 digest. On arm64 hosts this runs under emulation. Add
-an explicit arm64 digest before publishing multi-platform release artifacts.
+linux/amd64 is the only supported reproducible target. The pinned StageX Rust
+pallet (`sha256:2fbe7b…`) is a single-arch amd64 OCI image, not a multi-platform
+index, so `--platform linux/arm64` has nothing to pull. On arm64 hosts the build
+runs the amd64 pallet under emulation.
+
+StageX's toolchain is arch-aware (`packages/core/rust/Containerfile` handles both
+`amd64`/`x86_64` and `arm64`/`aarch64`), and our `Containerfile.stagex` keeps the
+matching `TARGETARCH` logic, but StageX does not publish a turnkey arm64 pallet
+image. Producing arm64 artifacts would require building and pinning a StageX
+arm64 rust pallet digest of your own — it is not a drop-in change.

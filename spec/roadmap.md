@@ -72,9 +72,9 @@ The release-hardening items below are tentative and should be refined based on s
 
 - [x] Pin the release build environment with a StageX Rust pallet digest.
 - [x] Package the server gateway and CLI as reproducible linux/amd64 OCI tarballs.
-- [x] Publish current expected OCI tarball hashes in README and `docs/BUILDING.md`.
+- [x] Record per-commit expected OCI tarball hashes (`checksums/sha256sums-<gitrev>.txt`, emitted by the build script).
 - [x] Add no-cache reproduction commands that rebuild and compare the StageX OCI artifacts.
-- [ ] Add an explicit arm64 StageX pallet digest before publishing multi-platform artifacts.
+- [ ] linux/amd64 is the supported reproducible target. arm64 is deferred: the pinned StageX rust pallet is amd64-only (single-arch image, not a multi-platform index), so arm64 would require building and pinning a self-built StageX arm64 pallet, not just adding a digest.
 - [ ] Add CI that builds the server gateway binary with locked inputs and records the binary digest as a golden release artifact.
 - [ ] Add CI that packages the gateway binary into a GHCR image and records the image digest and expected measurement material as golden release artifacts.
 - [ ] Evaluate build provenance for release artifacts, such as SLSA provenance or GitHub artifact attestations, if it fits the verification model.
