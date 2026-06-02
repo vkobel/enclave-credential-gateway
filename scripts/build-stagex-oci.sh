@@ -21,7 +21,8 @@ usage() {
 
 	Artifacts are pinned to the build commit via SOURCE_DATE_EPOCH (its
 	committer timestamp). Builds are --no-cache by default; ALLOW_CACHE=1 opts
-	into caching for fast local iteration (not certifiable).
+	into caching for fast local iteration of the default build only (it is
+	rejected with --tag and --check, which must reproduce from a clean build).
 	EOF
 }
 
@@ -38,6 +39,14 @@ case "${1:-}" in
 	"") ;;
 	*) echo "unknown argument: $1 (try --help)" >&2; exit 2 ;;
 esac
+
+# Certify (--tag) and verify (--check) must reproduce from a clean build; a
+# cached layer carries stale timestamps and would emit a hash a third party
+# can't match. ALLOW_CACHE is only for fast local iteration of the default build.
+if { [ "$MODE" = tag ] || [ "$MODE" = check ]; } && [ "${ALLOW_CACHE:-}" = 1 ]; then
+	echo "refusing $MODE with ALLOW_CACHE=1: certify/verify must use a clean build" >&2
+	exit 2
+fi
 
 case "$OUTPUT_DIR" in
 	/*) ;;

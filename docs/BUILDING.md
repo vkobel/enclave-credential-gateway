@@ -20,7 +20,9 @@ are `scratch` images containing only the statically linked binary.
 The script runs with `--no-cache` by default so every invocation produces a
 clean, reproducible artifact. Set `ALLOW_CACHE=1` to reuse cached layers during
 local iteration (faster, but may emit a stale hash that a clean reproduction
-won't match):
+won't match). `ALLOW_CACHE=1` is only honored for the default build; `--tag` and
+`--check` reject it, since certified and verified hashes must come from a clean
+build:
 
 ```bash
 ALLOW_CACHE=1 ./scripts/build-stagex-oci.sh
