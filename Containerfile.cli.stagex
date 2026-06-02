@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-# Reproducible StageX build of the credential gateway SERVER.
-# This is the only artifact Caution deploys to the enclave (see Procfile).
-# The CLI is a client-side tool built separately by Containerfile.cli.stagex.
+# Reproducible StageX build of the `gate` CLI (client-side token/activation tool).
+# This is NOT an enclave artifact and is never deployed by Caution; the server is
+# built separately by Containerfile.stagex.
 
 # Pinned linux/amd64 StageX Rust pallet digest, selected 2026-05-13 from:
 # https://stagex.tools/packages/pallet/rust/
@@ -28,13 +28,12 @@ RUN --network=none <<-'EOF'
 	triple="$([ "${TARGETARCH}" = "arm64" ] && echo aarch64 || echo x86_64)-unknown-linux-musl"
 
 	cargo build --frozen --release --target "${triple}" \
-		-p enclave-credential-gateway
+		-p gate-cli
 
-	install -Dm755 "/target/${triple}/release/enclave-credential-gateway" \
-		/rootfs/usr/bin/enclave-credential-gateway
+	install -Dm755 "/target/${triple}/release/gate" \
+		/rootfs/usr/bin/gate
 EOF
 
-FROM scratch AS server
+FROM scratch AS cli
 COPY --from=build /rootfs/ /
-EXPOSE 8080
-ENTRYPOINT ["/usr/bin/enclave-credential-gateway"]
+ENTRYPOINT ["/usr/bin/gate"]

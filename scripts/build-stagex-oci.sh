@@ -27,20 +27,20 @@ esac
 
 mkdir -p "$OUTPUT_DIR"
 
-build_target() {
-	target="$1"
+build_file() {
+	file="$1"
 	name="$2"
 
 	SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" docker buildx build \
 		--platform "$TARGET_PLATFORM" \
-		--target "$target" \
 		--output "type=oci,dest=${OUTPUT_DIR}/${name}.oci.tar,rewrite-timestamp=true" \
-		-f "$ROOT/Containerfile.stagex" \
+		-f "$ROOT/$file" \
 		"$ROOT"
 }
 
-build_target server "${IMAGE_PREFIX}-server"
-build_target cli "${IMAGE_PREFIX}-cli"
+# Server is the only Caution enclave artifact; CLI is a separate client tool.
+build_file Containerfile.stagex     "${IMAGE_PREFIX}-server"
+build_file Containerfile.cli.stagex "${IMAGE_PREFIX}-cli"
 
 GITREV="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 CHECKSUMS_DIR="${ROOT}/checksums"
