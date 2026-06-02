@@ -20,7 +20,9 @@ are `scratch` images containing only the statically linked binary.
 The script runs with `--no-cache` by default so every invocation produces a
 clean, reproducible artifact. Set `ALLOW_CACHE=1` to reuse cached layers during
 local iteration (faster, but may emit a stale hash that a clean reproduction
-won't match):
+won't match). `ALLOW_CACHE=1` is only honored for the default build; `--tag` and
+`--check` reject it, since certified and verified hashes must come from a clean
+build:
 
 ```bash
 ALLOW_CACHE=1 ./scripts/build-stagex-oci.sh
@@ -40,6 +42,18 @@ annotated git tag:
 ./scripts/build-stagex-oci.sh --tag v0.1.0
 git push origin v0.1.0
 ```
+
+### Continuous verification
+
+Pushing a `v*` tag triggers `.github/workflows/release-verify.yml`. On a clean
+amd64 runner it rebuilds the tagged commit `--no-cache` and runs `--check`
+against the hashes recorded on the tag — an independent reproduction on
+different hardware.
+
+- Pass/fail shows on the tagged commit, the Actions tab, and the README badge.
+- A failed reproduction auto-files an issue labelled `reproducibility`.
+- Only `v*` tags trigger it; don't tag feature branches you don't intend to
+  release.
 
 ### Reproducing and verifying a tagged commit
 
