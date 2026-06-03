@@ -49,11 +49,6 @@ pub struct ToolFile {
     pub content: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActivationMode {
-    Generated,
-    Describe,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvExport {
@@ -80,17 +75,7 @@ impl Activation {
             .collect()
     }
 
-    pub fn describe_lines(&self) -> Vec<String> {
-        self.exports
-            .iter()
-            .map(|export| format!("export {}={}", export.key, export.value))
-            .chain(
-                self.files
-                    .iter()
-                    .map(|path| format!("write {}", path.display())),
-            )
-            .collect()
-    }
+
 }
 
 struct ToolContext<'a> {
@@ -108,17 +93,9 @@ pub fn activate(
     token_name: &str,
     tool_filter: Option<&[String]>,
     route_filter: Option<&str>,
-    mode: ActivationMode,
 ) -> Result<Activation> {
     let manifest = load_manifest()?;
-    activate_with_manifest(
-        manifest,
-        config,
-        token_name,
-        tool_filter,
-        route_filter,
-        mode,
-    )
+    activate_with_manifest(manifest, config, token_name, tool_filter, route_filter)
 }
 
 fn activate_with_manifest(
@@ -127,7 +104,6 @@ fn activate_with_manifest(
     token_name: &str,
     tool_filter: Option<&[String]>,
     route_filter: Option<&str>,
-    mode: ActivationMode,
 ) -> Result<Activation> {
     if let Some(route_filter) = route_filter {
         if !manifest.routes.contains_key(route_filter) {
@@ -172,7 +148,7 @@ fn activate_with_manifest(
             continue;
         }
 
-        let managed_files = materialize_managed_files(&tool, &adapter, &ctx, mode)?;
+        let managed_files = materialize_managed_files(&tool, &adapter, &ctx)?;
         activation.files.extend(managed_files.values().cloned());
         for env in &adapter.env {
             if !ctx.has_route(env.requires_route.as_deref()) {
@@ -183,7 +159,7 @@ fn activate_with_manifest(
         }
 
         if adapter.git_credential_helper && ctx.has_route(Some("github")) {
-            let gitconfig = materialize_git_credential_config(&tool, &ctx, mode)?;
+            let gitconfig = materialize_git_credential_config(&tool, &ctx)?;
             activation.files.push(gitconfig.clone());
             push_export(
                 &mut activation.exports,
@@ -192,13 +168,9 @@ fn activate_with_manifest(
             );
         }
 
-        activation.files.extend(install_tool_files(
-            &tool,
-            &adapter,
-            &ctx,
-            &managed_files,
-            mode,
-        )?);
+        activation
+            .files
+            .extend(install_tool_files(&tool, &adapter, &ctx, &managed_files)?);
     }
 
     Ok(activation)
@@ -227,7 +199,6 @@ fn install_tool_files(
     adapter: &ToolAdapter,
     ctx: &ToolContext<'_>,
     managed_files: &HashMap<String, PathBuf>,
-    mode: ActivationMode,
 ) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     for file in &adapter.files {
@@ -238,14 +209,7 @@ fn install_tool_files(
         let Some(target) = target else {
             continue;
         };
-        paths.push(write_tool_file(
-            tool,
-            file,
-            target,
-            ctx,
-            managed_files,
-            mode,
-        )?);
+        paths.push(write_tool_file(tool, file, target, ctx, managed_files)?);
     }
     Ok(paths)
 }
@@ -292,7 +256,6 @@ fn materialize_managed_files(
     tool: &str,
     adapter: &ToolAdapter,
     ctx: &ToolContext<'_>,
-    mode: ActivationMode,
 ) -> Result<HashMap<String, PathBuf>> {
     let mut managed_files = HashMap::new();
 
@@ -308,10 +271,8 @@ fn materialize_managed_files(
             .generated_root
             .join(validate_managed_path(relative_path)?);
         let content = render_template(&file.content, ctx, &managed_files)?;
-        if mode != ActivationMode::Describe {
-            write_secret_file(&path, content)
-                .with_context(|| format!("Failed to write managed file for tool '{}'", tool))?;
-        }
+        write_secret_file(&path, content)
+            .with_context(|| format!("Failed to write managed file for tool '{}'", tool))?;
         managed_files.insert(file.id.clone(), path);
     }
 
@@ -324,17 +285,12 @@ fn write_tool_file(
     target: &str,
     ctx: &ToolContext<'_>,
     managed_files: &HashMap<String, PathBuf>,
-    mode: ActivationMode,
 ) -> Result<PathBuf> {
     let target = render_template(target, ctx, managed_files)?;
     let path = Config::expand_home(&target);
     let content = render_template(&file.content, ctx, managed_files)?;
-
-    if mode != ActivationMode::Describe {
-        write_secret_file(&path, content)
-            .with_context(|| format!("Failed to write config file for tool '{}'", tool))?;
-    }
-
+    write_secret_file(&path, content)
+        .with_context(|| format!("Failed to write config file for tool '{}'", tool))?;
     Ok(path)
 }
 
@@ -380,11 +336,7 @@ fn render_template(
     Ok(rendered)
 }
 
-fn materialize_git_credential_config(
-    tool: &str,
-    ctx: &ToolContext<'_>,
-    mode: ActivationMode,
-) -> Result<PathBuf> {
+fn materialize_git_credential_config(tool: &str, ctx: &ToolContext<'_>) -> Result<PathBuf> {
     let path = ctx.generated_root.join("gitconfig");
     let helper = format!("!gate git-credential {}", shell_word(ctx.token_name));
     let content = format!(
@@ -392,12 +344,8 @@ fn materialize_git_credential_config(
         ctx.gateway_url,
         helper.replace('"', "\\\"")
     );
-
-    if mode != ActivationMode::Describe {
-        write_secret_file(&path, content).with_context(|| {
-            format!("Failed to write Git credential config for tool '{}'", tool)
-        })?;
-    }
+    write_secret_file(&path, content)
+        .with_context(|| format!("Failed to write Git credential config for tool '{}'", tool))?;
     Ok(path)
 }
 
@@ -490,7 +438,7 @@ fn host_only(url: &str) -> String {
 mod tests {
     use super::{
         activate, activate_with_manifest, load_manifest, load_manifest_from_files,
-        validate_managed_path, ActivationMode, EnvExport,
+        validate_managed_path, EnvExport,
     };
     use crate::config::{Config, TokenEntry};
     use crate::test_support::with_temp_config_root;
@@ -557,7 +505,6 @@ env:
             "laptop",
             Some(&["aider".to_string()]),
             None,
-            ActivationMode::Describe,
         )
         .unwrap();
 
@@ -575,7 +522,6 @@ env:
             "laptop",
             Some(&["missing-tool".to_string()]),
             None,
-            ActivationMode::Describe,
         )
         .unwrap_err();
         assert!(tool_error
@@ -587,7 +533,6 @@ env:
             "laptop",
             Some(&["codex".to_string()]),
             Some("missing-route"),
-            ActivationMode::Describe,
         )
         .unwrap_err();
         assert!(route_error
@@ -599,14 +544,7 @@ env:
     fn gh_adapter_exports_enterprise_credentials() {
         with_temp_config_root(|temp| {
             let config = config_with_scope(&["github"]);
-            let activation = activate(
-                &config,
-                "laptop",
-                Some(&["gh".to_string()]),
-                None,
-                ActivationMode::Generated,
-            )
-            .unwrap();
+            let activation = activate(&config, "laptop", Some(&["gh".to_string()]), None).unwrap();
             let gitconfig = temp
                 .path()
                 .join(".config/gate/generated/gh/laptop/gitconfig");
@@ -644,14 +582,7 @@ env:
     fn all_routes_token_activates_scoped_tools() {
         with_temp_config_root(|_temp| {
             let config = config_with_all_routes();
-            let activation = activate(
-                &config,
-                "laptop",
-                Some(&["gh".to_string()]),
-                None,
-                ActivationMode::Generated,
-            )
-            .unwrap();
+            let activation = activate(&config, "laptop", Some(&["gh".to_string()]), None).unwrap();
 
             assert!(activation
                 .exports
@@ -668,14 +599,8 @@ env:
     fn codex_generated_activation_sets_codex_home() {
         with_temp_config_root(|temp| {
             let config = config_with_scope(&["openai"]);
-            let activation = activate(
-                &config,
-                "laptop",
-                Some(&["codex".to_string()]),
-                None,
-                ActivationMode::Generated,
-            )
-            .unwrap();
+            let activation =
+                activate(&config, "laptop", Some(&["codex".to_string()]), None).unwrap();
 
             let codex_home = temp.path().join(".config/gate/generated/codex/laptop/home");
             assert!(activation.exports.contains(&EnvExport {
@@ -701,14 +626,7 @@ env:
         let entry = config.tokens.remove("laptop").unwrap();
         config.tokens.insert("../escape".to_string(), entry);
 
-        let error = activate(
-            &config,
-            "../escape",
-            Some(&["codex".to_string()]),
-            None,
-            ActivationMode::Describe,
-        )
-        .unwrap_err();
+        let error = activate(&config, "../escape", Some(&["codex".to_string()]), None).unwrap_err();
 
         assert!(error
             .to_string()

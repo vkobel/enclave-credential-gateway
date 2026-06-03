@@ -29,9 +29,6 @@ enum Commands {
         /// Print eval-safe shell exports instead of launching an activated subshell
         #[arg(long)]
         eval: bool,
-        /// Describe activation actions without applying them
-        #[arg(long)]
-        describe: bool,
         /// Restrict to one or more tool adapters
         #[arg(long, value_delimiter = ',')]
         tool: Vec<String>,
@@ -88,10 +85,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Activate {
             name,
             eval,
-            describe,
             tool,
             route,
-        } => commands::activate::run(&name, eval, describe, &tool, route.as_deref())?,
+        } => commands::activate::run(&name, eval, &tool, route.as_deref())?,
         Commands::Admin { action } => match action {
             AdminAction::Token { action } => match action {
                 TokenAction::Create {

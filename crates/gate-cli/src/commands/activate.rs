@@ -1,32 +1,14 @@
 use crate::config::Config;
-use crate::tooling::{self, Activation, ActivationMode};
+use crate::tooling::{self, Activation};
 use anyhow::{bail, Result};
 use std::io::IsTerminal;
 use std::process::Command;
 
-pub fn run(
-    name: &str,
-    eval: bool,
-    describe: bool,
-    tools: &[String],
-    route: Option<&str>,
-) -> Result<()> {
-    if describe && eval {
-        bail!("--describe cannot be combined with --eval");
-    }
-
+pub fn run(name: &str, eval: bool, tools: &[String], route: Option<&str>) -> Result<()> {
     let config = Config::load()?;
     let tool_filter = (!tools.is_empty()).then_some(tools);
 
-    if describe {
-        let activation =
-            tooling::activate(&config, name, tool_filter, route, ActivationMode::Describe)?;
-        print_description(name, &activation);
-        return Ok(());
-    }
-
-    let activation =
-        tooling::activate(&config, name, tool_filter, route, ActivationMode::Generated)?;
+    let activation = tooling::activate(&config, name, tool_filter, route)?;
 
     if eval || !std::io::stdout().is_terminal() {
         for line in activation.shell_lines() {
@@ -36,13 +18,6 @@ pub fn run(
     }
 
     launch_subshell(name, &activation)
-}
-
-fn print_description(name: &str, activation: &Activation) {
-    println!("Enclave Credential Gateway activation for token '{name}':");
-    for line in activation.describe_lines() {
-        println!("  {line}");
-    }
 }
 
 fn launch_subshell(name: &str, activation: &Activation) -> Result<()> {
