@@ -53,6 +53,20 @@ case "$OUTPUT_DIR" in
 	*) OUTPUT_DIR="${ROOT}/${OUTPUT_DIR}" ;;
 esac
 
+# The StageX pallet base is pinned by a per-arch digest inside each
+# Containerfile. Only build for a platform we have actually pinned a digest
+# for, so adding a new --platform can't silently resolve a different base
+# image (or fail cryptically deep inside buildx). To add an arch: pin its
+# StageX digest in both Containerfiles, then list it here.
+case "$TARGET_PLATFORM" in
+	linux/amd64) ;;
+	*)
+		printf 'unsupported TARGET_PLATFORM %s: pin a StageX pallet digest for it in the Containerfiles, then add it to this guard\n' \
+			"$TARGET_PLATFORM" >&2
+		exit 2
+		;;
+esac
+
 mkdir -p "$OUTPUT_DIR"
 
 # Build from scratch by default. A cached layer keeps the rewritten timestamps
@@ -68,18 +82,22 @@ fi
 build_file() {
 	file="$1"
 	name="$2"
+	target="$3"
 
 	SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" docker buildx build \
 		$CACHE_FLAG \
 		--platform "$TARGET_PLATFORM" \
+		--target "$target" \
 		--output "type=oci,dest=${OUTPUT_DIR}/${name}.oci.tar,rewrite-timestamp=true" \
 		-f "$ROOT/$file" \
 		"$ROOT"
 }
 
 # Server is the only Caution enclave artifact; CLI is a separate client tool.
-build_file Containerfile.stagex     "${IMAGE_PREFIX}-server"
-build_file Containerfile.cli.stagex "${IMAGE_PREFIX}-cli"
+# Pin the final stage explicitly so a future stage added after it can't become
+# the default build target and silently change the measured artifact.
+build_file Containerfile.stagex     "${IMAGE_PREFIX}-server" server
+build_file Containerfile.cli.stagex "${IMAGE_PREFIX}-cli"    cli
 
 GITREV="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
@@ -130,6 +148,14 @@ check)
 		exit 1
 	fi
 	printf 'Verifying %s against tag %s\n\n' "$OUTPUT_DIR" "$TAG"
-	printf '%s\n' "$EXPECTED" | (cd "$OUTPUT_DIR" && $HASH_CMD -c -)
+	if printf '%s\n' "$EXPECTED" | (cd "$OUTPUT_DIR" && $HASH_CMD -c -); then
+		printf '\nReproduced hashes:\n%s\n' "$(sums)"
+	else
+		# shasum -c only prints FAILED, not the hash it computed; show both
+		# sides so a divergence is diagnosable straight from the CI log.
+		printf '\nExpected (tag %s):\n%s\n\nReproduced:\n%s\n' \
+			"$TAG" "$EXPECTED" "$(sums)" >&2
+		exit 1
+	fi
 	;;
 esac
