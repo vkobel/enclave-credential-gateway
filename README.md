@@ -2,7 +2,7 @@
 
 [![Reproducible build](https://github.com/vkobel/enclave-credential-gateway/actions/workflows/release-verify.yml/badge.svg?event=push)](https://github.com/vkobel/enclave-credential-gateway/actions/workflows/release-verify.yml)
 
-**Status: alpha / early implementation.** Enclave Credential Gateway is early work toward a TEE-backed credential gateway for AI agents. The working gateway already lets clients use scoped phantom tokens (`gate_...`) instead of real vendor keys, and the server/CLI can be rebuilt as byte-for-byte reproducible StageX OCI artifacts. The TEE trust boundary, attestation flow, sealed credential storage, and live release verification are not implemented yet.
+**Status: alpha / early implementation.** Enclave Credential Gateway is early work toward a TEE-backed credential gateway for AI agents. The working gateway already lets clients use scoped phantom tokens (`gate_...`) instead of real vendor keys, and the server/CLI can be rebuilt as byte-for-byte reproducible StageX OCI artifacts. The target deployment is the [Caution](https://caution.co) platform (current TEE backing: AWS Nitro Enclaves, with more planned), which provides the enclave, attestation (`/attestation`), and reproducible measurement verification (`caution verify`). Attested credential provisioning and a `gate verify` command are not implemented yet.
 
 **Core idea:** credentials should be infrastructure, not agent state.
 
@@ -19,10 +19,10 @@ Enclave Credential Gateway's target architecture is a network gateway running in
 | Agent cannot read the real key | yes | yes |
 | Central revocation and rotation | limited | yes |
 | Works from other devices or CI | no | yes |
-| Operator cannot read the real key | no | target: TDX boundary |
-| Verifiable running binary | no | target: attestation + MRTD |
+| Operator cannot read the real key | no | target: Caution enclave boundary |
+| Verifiable running binary | no | target: Caution attestation + reproducible measurements |
 
-Verification is the key idea behind the TEE path. The `gate` CLI will have a normal verification mode that checks a gateway's attestation evidence before trusting it, and a heavier reproducibility mode that builds the same release locally, compares the resulting image and measurement material, and checks it against the live enclave registers reported by the server. The goal is for a technical user to verify both "this server is running inside the expected enclave" and "that enclave corresponds to source and release artifacts I can inspect."
+Verification is the key idea behind the TEE path. Today `caution verify --attestation-url <url>` fetches the platform attestation, asserts no debug bit, reproduces the enclave from source, and confirms the measurements match the live enclave. The roadmap brings the same check into the `gate` CLI (`gate verify`). The goal is for a technical user to verify both "this server is running inside the expected enclave" and "that enclave corresponds to source I can inspect."
 
 ---
 
@@ -35,10 +35,11 @@ This repo is an early work in progress. The proxy, token registry, and CLI are u
 - **Admin API** - `POST /admin/tokens`, `GET /admin/tokens`, `DELETE /admin/tokens/:id`, protected by `GATE_ADMIN_TOKEN`.
 - **CLI** - `gate admin token ...` for gateway administration, plus `gate activate` and `gate git-credential` for local tool setup.
 - **Tool activation** - generated config/env for `gh`, Codex, and Claude Code.
-- **Reproducible OCI artifacts** - server and CLI images build through [StageX](https://codeberg.org/stagex/stagex) with pinned build inputs, offline `cargo build --frozen --release`, timestamp-normalized OCI exports, documented expected hashes, and verified byte-for-byte no-cache rebuilds. See [docs/BUILDING.md](./docs/BUILDING.md).
-- **Deployment scaffold** - Docker Compose with Caddy TLS and optional `GATE_DOMAIN`.
+- **Reproducible OCI artifacts** - server and CLI images build through [StageX](https://codeberg.org/stagex/stagex) with pinned build inputs, offline `cargo build --frozen --release`, timestamp-normalized OCI exports, documented expected hashes, and verified byte-for-byte no-cache rebuilds. This is the foundation that makes the Caution EIF PCRs reproducible. See [docs/BUILDING.md](./docs/BUILDING.md).
+- **Caution-ready** - the `Procfile` deploys the server image through Caution (current TEE backing: AWS Nitro Enclaves); the enclave, attestation, and measurement verification come from the platform.
+- **Deployment scaffold** - Docker Compose with Caddy TLS and optional `GATE_DOMAIN` for local development.
 
-**Not implemented yet:** TDX attestation (`GET /attest`), MRTD publication and live enclave verification, sealed credential storage, audit log, token expiry, and additional route profiles beyond OpenAI, Anthropic, and GitHub.
+**Not implemented yet:** `gate verify` (the gateway's own verifier, parity with `caution verify`), published golden PCRs, attested credential provisioning, audit log, token expiry, and additional route profiles beyond OpenAI, Anthropic, and GitHub. Attestation itself is provided by the Caution platform, not by the gateway.
 
 See [spec/roadmap.md](./spec/roadmap.md) for the implementation plan.
 
@@ -186,7 +187,7 @@ client sends gate_... phantom
     -> upstream receives only the real credential
 ```
 
-The TEE version will keep the same request model, but move the credential boundary into Intel TDX and expose public attestation. See [spec/tee-security.md](./spec/tee-security.md) for the target security model.
+The TEE version will keep the same request model, but move the credential boundary into a Caution enclave with platform-provided attestation. See [spec/tee-security.md](./spec/tee-security.md) for the target security model.
 
 ---
 

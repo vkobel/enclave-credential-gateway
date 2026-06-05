@@ -2,7 +2,7 @@
 
 ## What This Project Is
 
-Enclave Credential Gateway is early work toward a TEE-backed credential gateway for AI agents. The current repo contains a working Rust gateway/proxy, phantom token registry, CLI activation flow, and reproducible StageX OCI artifacts for the server and CLI. The TEE trust boundary, attestation endpoint, sealed credential store, and verification flow are roadmap work.
+Enclave Credential Gateway is early work toward a TEE-backed credential gateway for AI agents. The current repo contains a working Rust gateway/proxy, phantom token registry, CLI activation flow, and reproducible StageX OCI artifacts for the server and CLI. It deploys through the [Caution](https://caution.co) platform, which provides the enclave, attestation, and reproducible measurement verification. The TEE trust boundary, attested credential provisioning, and a `gate verify` command are roadmap work.
 
 Clients use scoped phantom tokens (`gate_...`) instead of real API keys. The gateway validates the phantom, checks route scope, removes the client credential, injects the real server-side credential, and forwards upstream.
 
@@ -53,6 +53,7 @@ scripts/
 - `GATE_PHANTOM_TOKEN` is a legacy single-token fallback. The registry path is preferred for new work.
 - Current shipped route profiles are `openai`, `anthropic`, and `github`.
 - Routes are embedded at build time from `profiles/routes/*.yaml`; there is no runtime profile loading.
-- StageX reproducible OCI builds are current behavior; TDX measurement publication and `gate verify` consumption are not.
+- StageX reproducible OCI builds are current behavior and are the foundation for Caution's reproducible enclave measurements; published golden measurements and `gate verify` are not yet implemented.
 - The server (`Containerfile.stagex`) and CLI (`Containerfile.cli.stagex`) build from separate single-target files. Only the server is the Caution/enclave artifact; build the server alone (no co-build with the CLI) so its measured bytes stay stable. `Procfile` deploys it.
-- TDX attestation, sealed storage, audit log, and `gate verify` are planned features, not current behavior.
+- The platform is Caution (current TEE backing: AWS Nitro Enclaves; Caution plans to add more). Attestation and `caution verify` are provided by the platform — the gateway implements no attestation endpoint of its own. Center docs on Caution, not on a specific substrate.
+- Attested credential provisioning (over steve), audit log, and `gate verify` parity with `caution verify` are planned features, not current behavior.

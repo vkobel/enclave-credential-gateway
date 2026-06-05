@@ -1,5 +1,13 @@
 # Building
 
+Two layers of reproducibility:
+
+- **StageX OCI image** (below) — the deterministic, byte-for-byte reproducible
+  server image. This is the foundation.
+- **Caution enclave** ([Caution verification](#caution-verification)) — Caution packs
+  the image into an enclave and measures it; reproducibility is then checked through
+  Caution's measurements rather than raw tarball hashes.
+
 ## StageX OCI Images
 
 Each shipped Rust binary has its own single-target Containerfile:
@@ -115,3 +123,35 @@ StageX's toolchain is arch-aware (`packages/core/rust/Containerfile` handles bot
 matching `TARGETARCH` logic, but StageX does not publish a turnkey arm64 pallet
 image. Producing arm64 artifacts would require building and pinning a StageX
 arm64 rust pallet digest of your own — it is not a drop-in change.
+
+## Caution Verification
+
+The server is deployed through [Caution](https://docs.caution.co/), which packs the
+StageX image into a confidential enclave and measures it. Caution's current TEE backing
+is AWS Nitro Enclaves; Caution plans to support additional TEEs, so prefer the
+Caution-level commands and concepts over substrate-specific details.
+
+The deployment is described by the repo's `Procfile` (`containerfile`, `binary`/`run`,
+`app_sources`, `http_port`, `locksmith`). Caution substitutes `${COMMIT}` so the build
+is pinned to source.
+
+Build the enclave and read its measurements:
+
+```bash
+caution apps build      # produces the enclave image and its measurements (PCR0/1/2 on Nitro)
+```
+
+Verify a deployed gateway reproduces from source:
+
+```bash
+caution verify --attestation-url https://<gateway>/attestation
+```
+
+`caution verify` generates a fresh nonce, fetches the platform attestation plus the
+enclave manifest, reproduces the enclave from the manifest's pinned source commits, and
+confirms the live measurements match — rejecting debug-mode (zeroed-measurement)
+evidence. The byte-for-byte StageX reproducibility above is what makes those
+measurements reproducible.
+
+See the [caution-platform deployment guide](https://docs.caution.co/) for QEMU local
+testing, the attestation endpoint, and production deployment.

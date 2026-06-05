@@ -1,6 +1,6 @@
 # Enclave Credential Gateway - Vision
 
-> Status: this is the product vision and target architecture. The current repository has a working proxy, phantom token registry, CLI activation flow, and reproducible StageX OCI artifacts for the server and CLI. TDX attestation, sealed credential storage, audit logging, `gate verify`, and several route profiles described here are roadmap work.
+> Status: this is the product vision and target architecture. The current repository has a working proxy, phantom token registry, CLI activation flow, and reproducible StageX OCI artifacts for the server and CLI. The Caution deployment, attested credential provisioning, audit logging, `gate verify`, and several route profiles described here are roadmap work. The enclave, attestation, and measurement verification are provided by the [Caution](https://caution.co) platform (current TEE backing: AWS Nitro Enclaves, with more planned).
 
 ## What this is
 
@@ -14,7 +14,8 @@ outside your gateway.
 The working implementation already validates phantom tokens, checks route
 scope, injects real upstream credentials server-side, and forwards the
 result. The target TEE implementation moves that credential boundary inside
-Intel TDX so the real key never leaves the enclave.
+a Caution enclave (currently AWS Nitro) so the real key never leaves the
+enclave.
 
 Enclave Credential Gateway is meant to be to AI agents what a hardware password manager is to browsers -
 except the credentials never leave the device even to fill a form,
@@ -37,7 +38,7 @@ agent.
 | Operator can’t read the key | ❌ host access = full access | target: enclave boundary |
 | Works from any device / CI | ❌ local only | ✅ network-accessible |
 | One change updates all agents | ❌ restart every proxy | ✅ gateway is the source of truth |
-| Cryptographically verifiable binary | ❌ | target: TDX attestation + MRTD |
+| Cryptographically verifiable binary | ❌ | target: Caution attestation + reproducible measurements |
 | Audit trail is tamper-resistant | ❌ process can lie | target: log produced inside attested binary |
 
 A local proxy is a first step. Enclave Credential Gateway is the destination.
@@ -146,17 +147,18 @@ gateway. Rotation is a single command.
 A user with no Rust knowledge can complete this flow in **under 30
 minutes**, end to end:
 
-1. **Deploy.** One command (`gate deploy phala` or `docker compose up`)
-   stands up the gateway on Phala TDX CVM (or any Docker host). Deploy
+1. **Deploy.** `git push caution main` stands up the gateway in a Caution
+   enclave (or `docker compose up` on any Docker host for local dev). Deploy
    prints an `admin token` once.
-2. **Verify the binary.** `gate verify <gateway-url>` fetches `GET /attest`,
-   checks the TDX QuoteV4 against Intel's PCS, asserts no debug bit, and
-   prints the `MRTD` so the user can pin it. A heavier verification mode
-   locally rebuilds the released stack and compares the expected image and
-   measurement evidence against the live enclave registers.
-3. **Add real credentials.** `gate creds add openai sk-...` and
-   `gate creds add anthropic sk-ant-...`. Stored encrypted at rest, only
-   readable inside the TEE.
+2. **Verify the binary.** `caution verify --attestation-url <url>` fetches the
+   platform attestation, checks it against the platform root of trust, asserts
+   no debug bit, reproduces the enclave from source, and confirms the
+   measurements match the live enclave. `gate verify` (roadmap) brings the same
+   check into the `gate` CLI.
+3. **Add real credentials.** Today via Caution Locksmith, decrypted only inside
+   the enclave. The target solo-operator flow is `gate creds push`, which
+   verifies the enclave and sends credentials over steve's attestation-bound
+   channel into enclave RAM — readable only inside the enclave.
 4. **Mint phantoms per client.**
    ```
    gate admin token create --name laptop-claude-code --scope anthropic,github
@@ -183,14 +185,13 @@ minutes**, end to end:
 
 ### Still required for v1
 
-- TDX CVM deployment.
-- `GET /attest` returning a non-debug TDX QuoteV4.
-- Reproducible release artifacts and MRTD publication.
-- Encrypted credential store inside the TEE.
+- Caution deployment with published golden measurements.
+- `gate verify` parity with `caution verify` (non-debug attestation + reproduced measurements).
+- Attested credential provisioning over steve, held in enclave RAM.
 - Per-token hard expiry and finer endpoint policy.
 - Append-only structured audit log.
 - Additional route profiles: Groq, ElevenLabs, Ollama, Telegram, Together.
-- `gate` CLI: `deploy`, `verify`, `creds {add|rotate|rm|ls}`, `audit {tail|grep}`.
+- `gate` CLI: `deploy`, `verify`, `creds {push|rotate|rm|ls}`, `audit {tail|grep}`.
 - One-page `DEPLOY.md`.
 
 ### What is explicitly NOT in v1
@@ -223,18 +224,21 @@ minutes**, end to end:
                                 │ TLS
                                 ▼
            ┌────────────────────────────────────┐
-           │ Phala TDX CVM  (hardware boundary) │
+           │ Caution enclave (Nitro today)      │
            │                                    │
            │  enclave-credential-gateway        │
            │  ├─ phantom registry (enc)         │
-           │  ├─ credential store  (enc)        │
+           │  ├─ credential store  (RAM)        │
            │  │    openai    -> sk-proj-...     │
            │  │    github    -> ghp_...         │
            │  │    telegram  -> 7312...:AAH...  │
            │  │    stripe    -> sk_live_...     │
            │  ├─ per-token policy               │
-           │  ├─ audit log                      │
-           │  └─ GET /attest  (TDX QuoteV4)     │
+           │  └─ audit log                      │
+           ├────────────────────────────────────┤
+           │ Caution platform                   │
+           │  ├─ bootproofd  -> /attestation    │
+           │  └─ steve (e2e) -> attested channel│
            └──────────────┬─────────────────────┘
                           │ real credential injected here
               ┌───────────┼───────────┐
@@ -294,10 +298,10 @@ Backwards-compatible with
 single `GATE_PHANTOM_TOKEN` env var.
 
 **Phase 1c - next.**
-`/attest` returns a verified non-debug TDX QuoteV4. GHCR image published.
-`DEPLOY.md` walks an operator from "I have a Phala account" to a working
-gateway in under 15 minutes. End-to-end demo: Claude Code + phantom token,
-real key never on the client host.
+Deployed on Caution with `caution verify` reproducing the enclave measurements
+from source. `DEPLOY.md` walks an operator from "I have a Caution account" to a
+working gateway in under 15 minutes. End-to-end demo: Claude Code + phantom
+token, real key never on the client host.
 
 **Phase 2 - Policy + audit log + more profiles.**
 Per-token route allowlist, per-route `endpoint_rules` (method + path), hard expiry.
@@ -305,9 +309,9 @@ Append-only audit log to an encrypted on-disk volume, plus optional S3 sink.
 `gate audit tail`, `gate audit grep`, and additional route profiles.
 
 **Phase 3 - Polish.**
-`gate deploy phala` one-shot deploy helper. `gate verify` for attestation,
-including an optional local reproduce-and-compare mode. `gate creds
-{add|rotate|rm|ls}` against a sealed credential store.
+`gate deploy` one-shot Caution deploy helper. `gate verify` for attestation
+(parity with `caution verify`), including an optional local reproduce-and-compare
+mode. `gate creds {push|rotate|rm|ls}` for attested credential provisioning.
 `USING.md` with copy-paste recipes for Claude Code, OpenAI Python SDK,
 GitHub CLI, and a Telegram bot. End-to-end test that exercises the full
 flow from a fresh machine.
@@ -324,8 +328,9 @@ Each step is a direction, not a commitment. Each is justified by what v1
 **v1.x - delight & ergonomics.**
 - **Mobile provisioning via passkey.** A small companion mobile app where
   the operator pastes a real upstream key once, signs an envelope with a
-  passkey (WebAuthn), and the envelope is encrypted to the TEE's attested
-  public key. The plaintext never touches a laptop or CLI. This is the
+  passkey (WebAuthn), and the envelope is encrypted to the enclave's attested
+  public key (the same steve verifying key `gate creds push` uses). The
+  plaintext never touches a laptop or CLI. This is the
   right experience for first-time credential entry; we will not ship
   under-specified crypto for it.
 - **Minimal admin web UI** for non-CLI users.
@@ -344,11 +349,11 @@ Each step is a direction, not a commitment. Each is justified by what v1
 **v3 - enterprise / regulated.**
 - Mutual attestation. A hardened local companion (Secure-Enclave-backed
   client identity) that authenticates the device to the gateway, with the
-  gateway's `MRTD` pinned in the companion's signed config.
+  gateway's PCR values pinned in the companion's signed config.
 - OIDC issuance (Okta, Entra) bound to MDM-enrolled device identity.
 - Signed per-call receipts under an attested gateway key.
-- Substrate portability beyond Phala (Azure Confidential, GCP Confidential,
-  AWS Nitro).
+- Substrate portability beyond AWS Nitro (Azure Confidential, GCP Confidential,
+  Intel TDX).
 - Compliance posture: SOC2-friendly audit format, exportable evidence
   bundles.
 
@@ -363,9 +368,10 @@ the references for v3.
 - **First-time credential entry UX.** Today the operator pastes real keys
   into a CLI. The passkey/mobile envelope flow above is the target;
   envelope format, recovery path, and rotation still need design.
-- **Sealed credential storage at rest.** The target v1 path is credentials
-  sealed by Phala's secret injection or an enclave-derived key. A portable,
-  substrate-agnostic vault format is a v2 item.
+- **Credential provisioning.** The v1 paths are Caution Locksmith (quorum) and
+  owner-direct attested injection over steve, holding credentials in enclave
+  RAM. Persisting them across reboots without re-injection — a sealed,
+  substrate-agnostic vault format — is a v2 item.
 - **Audit-log integrity.** v1 logs are append-only on an encrypted volume.
   Hash-chained, tamper-evident logs (and signed receipts) are v3.
 
