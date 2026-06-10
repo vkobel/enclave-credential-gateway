@@ -6,8 +6,7 @@
 
 # Pinned linux/amd64 StageX Rust pallet digest, selected 2026-05-13 from:
 # https://stagex.tools/packages/pallet/rust/
-FROM stagex/pallet-rust@sha256:2fbe7b164dd92edb9c1096152f6d27592d8a69b1b8eb2fc907b5fadea7d11668 AS build
-ARG TARGETARCH
+FROM --platform=linux/amd64 stagex/pallet-rust@sha256:2fbe7b164dd92edb9c1096152f6d27592d8a69b1b8eb2fc907b5fadea7d11668 AS build
 
 WORKDIR /src
 
@@ -19,13 +18,11 @@ ENV CARGO_TARGET_DIR=/target
 ENV CARGO_INCREMENTAL=0
 ENV RUSTFLAGS="-C codegen-units=1 -C target-feature=+crt-static -C strip=symbols --remap-path-prefix=/src=. --remap-path-prefix=/target=target"
 
-# Keep dependency resolution and download separate from the offline release build.
-RUN triple="$([ "$TARGETARCH" = "arm64" ] && echo aarch64 || echo x86_64)-unknown-linux-musl" && \
-    cargo fetch --locked --target "$triple"
+RUN cargo fetch --locked --target "$(uname -m)-unknown-linux-musl"
 
 RUN --network=none <<-'EOF'
 	set -eux
-	triple="$([ "${TARGETARCH}" = "arm64" ] && echo aarch64 || echo x86_64)-unknown-linux-musl"
+	triple="$(uname -m)-unknown-linux-musl"
 
 	cargo build --frozen --release --target "${triple}" \
 		-p enclave-credential-gateway

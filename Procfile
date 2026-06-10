@@ -38,9 +38,7 @@ locksmith: true
 # cpus: 2
 
 # --- Optional ------------------------------------------------------------
-# domain: gateway.example.com
+domain: gate.kobl.one
 # steve handles /e2p/* on port 49500; the admin CLI uses it for encrypted admin ops.
-# NOTE: no inline comments on value lines — the Procfile parser reads the full
-# remainder of the line as the value (e2e would silently parse as false).
 e2e: true
 # debug: false   # NEVER true in prod: zeros PCRs and opens SSH on port 22.
