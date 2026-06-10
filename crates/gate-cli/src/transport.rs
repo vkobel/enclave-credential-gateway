@@ -60,10 +60,10 @@ impl AdminTransport {
         let builder = steve_sdk::Client::builder(&config.gateway_url, pcrs)
             .context("invalid gateway_url for steve client")?;
 
-        let builder = if let Some(ref base) = att.attestation_base_url {
+        let builder = if let Some(ref base) = att.base_url {
             builder
                 .attestation_base_url(base)
-                .context("invalid attestation_base_url")?
+                .context("invalid attestation base_url")?
         } else {
             builder
         };
@@ -88,6 +88,9 @@ impl AdminTransport {
                 admin_token,
                 gateway_url,
             } => {
+                // Plain mode: concatenate base + path directly (no Url::join path-stripping).
+                // Encrypted mode uses Url::join via steve-sdk, which may diverge if base has a
+                // path prefix — track this when host-based routing is introduced.
                 let url = plain_url(gateway_url, path);
                 let mut req = client
                     .request(method, &url)
@@ -95,7 +98,10 @@ impl AdminTransport {
                 if let Some(body) = json_body {
                     req = req.json(&body);
                 }
-                let resp = req.send().await.context("Failed to connect to gateway")?;
+                let resp = req
+                    .send()
+                    .await
+                    .with_context(|| format!("failed to connect to gateway at {gateway_url}"))?;
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
                 Ok((status, text))
@@ -113,10 +119,7 @@ impl AdminTransport {
                         .json(&body)
                         .map_err(|e| anyhow::anyhow!("failed to serialize body: {e}"))?;
                 }
-                let resp = builder
-                    .send()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("gateway request failed: {e}"))?;
+                let resp = builder.send().await.map_err(|e| annotate_steve_error(e))?;
                 let status = resp.status();
                 let text = resp
                     .text()
@@ -133,11 +136,35 @@ fn plain_url(gateway_url: &str, path: &str) -> String {
     format!("{base}{path}")
 }
 
+fn decode_pcr(hex_val: &str, label: &str) -> Result<Vec<u8>> {
+    let bytes = hex::decode(hex_val).with_context(|| format!("{label} is not valid hex"))?;
+    if bytes.len() != 48 {
+        anyhow::bail!(
+            "{label} must be 48 bytes (SHA-384, 96 hex chars); got {} bytes",
+            bytes.len()
+        );
+    }
+    Ok(bytes)
+}
+
 fn build_pcrs(att: &crate::config::AttestationConfig) -> Result<steve_sdk::ExpectedPcrs> {
-    let pcr0 = hex::decode(&att.pcr0).context("pcr0 is not valid hex")?;
-    let pcr1 = hex::decode(&att.pcr1).context("pcr1 is not valid hex")?;
-    let pcr2 = hex::decode(&att.pcr2).context("pcr2 is not valid hex")?;
+    let pcr0 = decode_pcr(&att.pcr0, "pcr0")?;
+    let pcr1 = decode_pcr(&att.pcr1, "pcr1")?;
+    let pcr2 = decode_pcr(&att.pcr2, "pcr2")?;
     Ok(HashMap::from_iter([(0u8, pcr0), (1u8, pcr1), (2u8, pcr2)]))
+}
+
+/// Annotate a steve_sdk error with user-facing context.
+/// Attestation failures get a hint to check PCR values against the deployed enclave.
+fn annotate_steve_error(e: steve_sdk::Error) -> anyhow::Error {
+    match &e {
+        steve_sdk::Error::AttestationVerification(_)
+        | steve_sdk::Error::AttestationStatus { .. } => anyhow::Error::new(e).context(
+            "attestation verification failed — check that [attestation] pcr0/pcr1/pcr2 \
+                 in config.toml match the deployed enclave measurements",
+        ),
+        _ => anyhow::Error::new(e).context("gateway request failed"),
+    }
 }
 
 #[cfg(test)]
@@ -192,7 +219,7 @@ mod tests {
                 pcr0: "ef093e4c1fd13878956589833c0e396b935cdf5ae45c1cc595e1a19a6da5812850f0ef3e77df918cb2a86d88ddf9cc03".to_string(),
                 pcr1: "ef093e4c1fd13878956589833c0e396b935cdf5ae45c1cc595e1a19a6da5812850f0ef3e77df918cb2a86d88ddf9cc03".to_string(),
                 pcr2: "21b9efbc184807662e966d34f390821309eeac6802309798826296bf3e8bec7c10edb30948c90ba67310f7b964fc500a".to_string(),
-                attestation_base_url: None,
+                base_url: None,
             }),
             ..Config::default()
         };
@@ -201,15 +228,16 @@ mod tests {
 
     #[test]
     fn e2e_with_invalid_pcr_hex_errors() {
+        let valid_pcr = "ef093e4c1fd13878956589833c0e396b935cdf5ae45c1cc595e1a19a6da5812850f0ef3e77df918cb2a86d88ddf9cc03";
         let config = Config {
             gateway_url: "https://example.com".to_string(),
             admin_token: Some("tok_test".to_string()),
             e2e: true,
             attestation: Some(AttestationConfig {
                 pcr0: "not-valid-hex".to_string(),
-                pcr1: "aabbcc".to_string(),
-                pcr2: "aabbcc".to_string(),
-                attestation_base_url: None,
+                pcr1: valid_pcr.to_string(),
+                pcr2: valid_pcr.to_string(),
+                base_url: None,
             }),
             ..Config::default()
         };
@@ -218,6 +246,30 @@ mod tests {
         assert!(
             full.contains("pcr0"),
             "error chain should mention pcr0: {full}"
+        );
+    }
+
+    #[test]
+    fn e2e_with_wrong_length_pcr_errors() {
+        // PCRs must be exactly 48 bytes (96 hex chars); shorter values must be rejected.
+        let valid_pcr = "ef093e4c1fd13878956589833c0e396b935cdf5ae45c1cc595e1a19a6da5812850f0ef3e77df918cb2a86d88ddf9cc03";
+        let config = Config {
+            gateway_url: "https://example.com".to_string(),
+            admin_token: Some("tok_test".to_string()),
+            e2e: true,
+            attestation: Some(AttestationConfig {
+                pcr0: "aabbcc".to_string(), // 3 bytes — too short
+                pcr1: valid_pcr.to_string(),
+                pcr2: valid_pcr.to_string(),
+                base_url: None,
+            }),
+            ..Config::default()
+        };
+        let err = AdminTransport::from_config(&config).unwrap_err();
+        let full = format!("{err:#}");
+        assert!(
+            full.contains("pcr0") && full.contains("48 bytes"),
+            "error should mention pcr0 and 48 bytes: {full}"
         );
     }
 }

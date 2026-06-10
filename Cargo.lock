@@ -2198,6 +2198,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "steve-sdk"
 version = "0.1.0"
+source = "git+https://codeberg.org/vkobel/steve-e2e-enclave-channel.git?rev=71fde6c26a121d4e7b64f00df3006a86c7fb6847#71fde6c26a121d4e7b64f00df3006a86c7fb6847"
 dependencies = [
  "aes-gcm",
  "base64",

@@ -4,4 +4,3 @@ members = [
     "crates/enclave-credential-gateway",
     "crates/gate-cli",
 ]
-

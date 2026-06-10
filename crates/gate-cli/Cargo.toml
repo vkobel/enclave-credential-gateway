@@ -19,7 +19,7 @@ toml = "0.8"
 dirs = "5"
 anyhow = "1"
 hex = "0.4"
-steve-sdk = { path = "../../../caution-stuff/steve/crates/steve-sdk" }
+steve-sdk = { git = "https://codeberg.org/vkobel/steve-e2e-enclave-channel.git", rev = "71fde6c26a121d4e7b64f00df3006a86c7fb6847" }
 
 [dev-dependencies]
 tempfile = "3"

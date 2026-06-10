@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::secure_file::validate_path_component;
 use crate::tooling;
 use crate::transport::AdminTransport;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 
@@ -50,8 +50,7 @@ pub async fn create(name: &str, scope: &[String], all_routes: bool) -> Result<()
 
     let (status, text) = transport
         .request(Method::POST, "/admin/tokens", Some(body))
-        .await
-        .context("Failed to connect to gateway")?;
+        .await?;
 
     if !status.is_success() {
         anyhow::bail!("Gateway returned {}: {}", status, text);
@@ -89,8 +88,7 @@ pub async fn list() -> Result<()> {
 
     let (status, text) = transport
         .request(Method::GET, "/admin/tokens", None)
-        .await
-        .context("Failed to connect to gateway")?;
+        .await?;
 
     if !status.is_success() {
         anyhow::bail!("Gateway returned {}: {}", status, text);
@@ -214,8 +212,7 @@ pub async fn revoke(name: &str) -> Result<()> {
 
     let (status, text) = transport
         .request(Method::GET, "/admin/tokens", None)
-        .await
-        .context("Failed to connect to gateway")?;
+        .await?;
 
     if !status.is_success() {
         anyhow::bail!("Gateway returned {}: {}", status, text);
@@ -230,8 +227,7 @@ pub async fn revoke(name: &str) -> Result<()> {
     let revoke_path = format!("/admin/tokens/{}", target.id);
     let (status, text) = transport
         .request(Method::DELETE, &revoke_path, None)
-        .await
-        .context("Failed to connect to gateway")?;
+        .await?;
 
     if status.is_success() {
         println!("Token '{}' revoked.", name);

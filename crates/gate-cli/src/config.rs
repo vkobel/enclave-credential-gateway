@@ -24,7 +24,7 @@ pub struct AttestationConfig {
     pub pcr0: String,
     pub pcr1: String,
     pub pcr2: String,
-    pub attestation_base_url: Option<String>,
+    pub base_url: Option<String>,
 }
 
 fn default_e2e() -> bool {
@@ -222,17 +222,14 @@ gateway_url = "https://example.com"
 pcr0 = "aabbcc"
 pcr1 = "ddeeff"
 pcr2 = "112233"
-attestation_base_url = "https://attest.example.com"
+base_url = "https://attest.example.com"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         let att = config.attestation.unwrap();
         assert_eq!(att.pcr0, "aabbcc");
         assert_eq!(att.pcr1, "ddeeff");
         assert_eq!(att.pcr2, "112233");
-        assert_eq!(
-            att.attestation_base_url.as_deref(),
-            Some("https://attest.example.com")
-        );
+        assert_eq!(att.base_url.as_deref(), Some("https://attest.example.com"));
     }
 
     #[test]
