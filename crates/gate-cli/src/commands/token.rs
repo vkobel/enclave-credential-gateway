@@ -33,11 +33,20 @@ struct CreateRequest {
     name: String,
     scope: Vec<String>,
     all_routes: bool,
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
+    creds: std::collections::HashMap<String, String>,
 }
 
-pub async fn create(name: &str, scope: &[String], all_routes: bool) -> Result<()> {
+pub async fn create(
+    name: &str,
+    scope: &[String],
+    all_routes: bool,
+    creds: &[(String, String)],
+) -> Result<()> {
     validate_path_component(name, "token name")?;
     validate_scope(scope, all_routes)?;
+
+    let creds_map: std::collections::HashMap<String, String> = creds.iter().cloned().collect();
 
     let config = Config::load()?;
     let transport = AdminTransport::from_config(&config)?;
@@ -46,6 +55,7 @@ pub async fn create(name: &str, scope: &[String], all_routes: bool) -> Result<()
         name: name.to_string(),
         scope: scope.to_vec(),
         all_routes,
+        creds: creds_map,
     })?;
 
     let (status, text) = transport

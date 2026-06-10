@@ -54,6 +54,11 @@ enum AdminAction {
         #[command(subcommand)]
         action: TokenAction,
     },
+    /// Manage registered service credentials
+    Creds {
+        #[command(subcommand)]
+        action: CredsAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -69,6 +74,10 @@ enum TokenAction {
         /// Create a token that can access all current and future routes
         #[arg(long)]
         all_routes: bool,
+        /// Bind a route to a registered service credential (format: route=cred-name).
+        /// The value is sent over the encrypted admin channel.
+        #[arg(long = "cred", value_name = "ROUTE=CRED", value_parser = parse_cred_binding)]
+        creds: Vec<(String, String)>,
     },
     /// List gateway tokens
     Ls,
@@ -77,6 +86,43 @@ enum TokenAction {
         /// Token name to revoke
         name: String,
     },
+}
+
+#[derive(Subcommand)]
+enum CredsAction {
+    /// Register a service credential (value sent over the encrypted admin channel)
+    Register {
+        /// Service this credential belongs to (e.g. openai, github)
+        service: String,
+        /// The secret credential value
+        value: String,
+        /// Name for this credential; defaults to <service>
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// List registered service credentials
+    Ls,
+    /// Remove a registered service credential by name
+    Rm {
+        /// Credential name to remove
+        name: String,
+    },
+}
+
+/// Parse a `route=cred-name` binding for `--cred`.
+fn parse_cred_binding(s: &str) -> Result<(String, String), String> {
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("'{}': expected format route=cred-name", s))?;
+    let route = &s[..pos];
+    let cred = &s[pos + 1..];
+    if route.is_empty() {
+        return Err(format!("'{}': route part must not be empty", s));
+    }
+    if cred.is_empty() {
+        return Err(format!("'{}': cred-name part must not be empty", s));
+    }
+    Ok((route.to_string(), cred.to_string()))
 }
 
 #[tokio::main]
@@ -95,9 +141,22 @@ async fn main() -> anyhow::Result<()> {
                     name,
                     scope,
                     all_routes,
-                } => commands::token::create(&name, &scope, all_routes).await?,
+                    creds,
+                } => commands::token::create(&name, &scope, all_routes, &creds).await?,
                 TokenAction::Ls => commands::token::list().await?,
                 TokenAction::Revoke { name } => commands::token::revoke(&name).await?,
+            },
+            AdminAction::Creds { action } => match action {
+                CredsAction::Register {
+                    service,
+                    value,
+                    name,
+                } => {
+                    let name = name.unwrap_or_else(|| service.clone());
+                    commands::creds::register(&name, &service, &value).await?
+                }
+                CredsAction::Ls => commands::creds::list().await?,
+                CredsAction::Rm { name } => commands::creds::rm(&name).await?,
             },
         },
         Commands::GitCredential { name, operation } => {
@@ -105,4 +164,45 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_cred_binding;
+
+    #[test]
+    fn parse_cred_binding_valid() {
+        let (route, cred) = parse_cred_binding("openai=sk-prod").unwrap();
+        assert_eq!(route, "openai");
+        assert_eq!(cred, "sk-prod");
+    }
+
+    #[test]
+    fn parse_cred_binding_missing_equals() {
+        let err = parse_cred_binding("openai-sk-prod").unwrap_err();
+        assert!(err.contains("route=cred-name"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_cred_binding_empty_route() {
+        let err = parse_cred_binding("=sk-prod").unwrap_err();
+        assert!(err.contains("route part must not be empty"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_cred_binding_empty_cred() {
+        let err = parse_cred_binding("openai=").unwrap_err();
+        assert!(
+            err.contains("cred-name part must not be empty"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_cred_binding_value_with_equals() {
+        // Only splits on the first '=', so values with '=' in the cred name are preserved
+        let (route, cred) = parse_cred_binding("github=my=cred").unwrap();
+        assert_eq!(route, "github");
+        assert_eq!(cred, "my=cred");
+    }
 }
