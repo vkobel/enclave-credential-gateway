@@ -182,6 +182,29 @@ gh repo list
 
 ---
 
+## Admin channel (steve E2E encryption)
+
+Admin commands (`gate admin creds ...`, `gate admin token ...`) are sent over the steve-encrypted channel by default. Required config:
+
+```toml
+# ~/.config/gate/config.toml
+e2e = true   # default
+
+[attestation]
+pcr0 = "..."   # PCR values from `caution verify` or attestation report
+pcr1 = "..."
+pcr2 = "..."
+# base_url = "..."   # steve base URL; defaults to gateway_url
+```
+
+For local dev or Docker Compose (no attestation):
+
+```toml
+e2e = false
+```
+
+---
+
 ## Verifying the gateway
 
 ```bash

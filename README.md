@@ -32,7 +32,7 @@ This repo is an early work in progress. The proxy, token registry, and CLI are u
 
 - **Gateway/proxy** - Axum HTTP gateway with route matching, auth middleware, credential stripping, and upstream credential injection.
 - **Phantom token registry** - named tokens, Blake3-hashed at rest, persisted to `tokens.json`, with per-token route scope enforcement.
-- **Admin API** - `POST /admin/tokens`, `GET /admin/tokens`, `DELETE /admin/tokens/:id`, protected by `GATE_ADMIN_TOKEN`.
+- **Admin API** - `POST /admin/tokens`, `GET /admin/tokens`, `DELETE /admin/tokens/:id`, `POST /admin/creds`, `GET /admin/creds`, `DELETE /admin/creds/:name`, protected by `GATE_ADMIN_TOKEN`.
 - **CLI** - `gate admin token ...` for gateway administration, plus `gate activate` and `gate git-credential` for local tool setup.
 - **Tool activation** - generated config/env for `gh`, Codex, and Claude Code.
 - **Reproducible OCI artifacts** - server and CLI images build through [StageX](https://codeberg.org/stagex/stagex) with pinned build inputs, offline `cargo build --frozen --release`, timestamp-normalized OCI exports, documented expected hashes, and verified byte-for-byte no-cache rebuilds. This is the foundation that makes the Caution EIF PCRs reproducible. See [docs/BUILDING.md](./docs/BUILDING.md).
@@ -138,6 +138,20 @@ gate admin token create --name codex-local --scope openai
 gate activate codex-local --tool codex
 codex
 ```
+
+### Runtime Service Tokens
+
+Register a named upstream API key at runtime (no restart required):
+
+```bash
+gate admin creds register openai sk-...          # register (or rotate) the openai cred
+gate admin creds ls                              # list registered creds (names only, no values)
+gate admin creds rm openai                       # remove; gateway falls back to env var
+
+gate admin token create --name mytoken --scope openai --cred openai=openai
+```
+
+Credentials are RAM-only. The admin channel is encrypted end-to-end via steve when `e2e = true` in config (default). See [docs/USING.md](./docs/USING.md) for admin channel config.
 
 ### Existing Gateway
 

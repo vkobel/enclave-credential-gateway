@@ -35,5 +35,5 @@ locksmith: true
 
 # --- Optional ------------------------------------------------------------
 # domain: gateway.example.com
-# e2e: false
+e2e: true   # steve handles /e2p/* on the reserved port; admin CLI uses it for encrypted admin ops
 # debug: false   # NEVER true in prod: zeros PCRs and opens SSH on port 22.
