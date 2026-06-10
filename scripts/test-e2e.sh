@@ -40,6 +40,21 @@ COMPOSE_OVERRIDE=""
 GH_E2E_WORKDIR=""
 E2E_TOKEN_IDS=()
 E2E_TOKENS_REVOKED=false
+E2E_CRED_NAMES=()
+E2E_CREDS_CLEANED=false
+
+cleanup_e2e_creds() {
+  [[ "$E2E_CREDS_CLEANED" == true ]] && return 0
+  E2E_CREDS_CLEANED=true
+  [[ ${#E2E_CRED_NAMES[@]} -eq 0 ]] && return 0
+  local name status
+  for name in "${E2E_CRED_NAMES[@]}"; do
+    status=$(curl -s -o /dev/null -w "%{http_code}" \
+      -X DELETE "http://localhost:${GATEWAY_PORT}/admin/creds/${name}" \
+      -H "Authorization: Bearer ${GATE_ADMIN_TOKEN}" 2>/dev/null || echo "000")
+    [[ "$status" =~ ^(204|404)$ ]] || echo "    Warning: cred cleanup for '${name}' returned ${status}"
+  done
+}
 
 revoke_e2e_tokens() {
   [[ "$E2E_TOKENS_REVOKED" == true ]] && return 0
@@ -74,6 +89,7 @@ revoke_e2e_tokens() {
 
 cleanup() {
   echo
+  cleanup_e2e_creds || true
   revoke_e2e_tokens || true
   [[ -n "$GW_TMPFILE" && -f "$GW_TMPFILE" ]] && rm -f "$GW_TMPFILE"
   [[ -n "$CLI_HOME" && -d "$CLI_HOME" ]] && rm -rf "$CLI_HOME"
@@ -655,6 +671,154 @@ fi # gh_user
 unset GIT_TERMINAL_PROMPT
 
 fi # GITHUB_TOKEN
+
+section "Admin creds"
+
+# 1. Wrong admin token → 401
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST "http://localhost:${GATEWAY_PORT}/admin/creds" \
+  -H "Authorization: Bearer wrong-admin-token" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"openai","service":"openai","value":"sk-bad"}' 2>/dev/null)
+[[ "$status" == "401" ]] \
+  && pass "POST /admin/creds with wrong admin token → 401" \
+  || fail "POST /admin/creds wrong token → expected 401, got $status"
+
+# 2. Register a cred
+E2E_CRED_NAMES+=("openai")
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST "http://localhost:${GATEWAY_PORT}/admin/creds" \
+  -H "Authorization: Bearer ${GATE_ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "{\"name\":\"openai\",\"service\":\"openai\",\"value\":\"sk-e2e-bogus-$$\"}" 2>/dev/null)
+[[ "$status" == "204" ]] \
+  && pass "POST /admin/creds register openai cred → 204" \
+  || fail "POST /admin/creds register → expected 204, got $status"
+
+# 3. GET /admin/creds → 200, contains name, does not contain value
+GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
+  "http://localhost:${GATEWAY_PORT}/admin/creds" \
+  -H "Authorization: Bearer ${GATE_ADMIN_TOKEN}" 2>/dev/null)
+GW_BODY=$(cat "$GW_TMPFILE")
+[[ "$GW_STATUS" == "200" ]] \
+  && pass "GET /admin/creds → 200" \
+  || fail "GET /admin/creds → expected 200, got $GW_STATUS"
+echo "$GW_BODY" | grep -q '"openai"' \
+  && pass "GET /admin/creds body contains cred name" \
+  || fail "GET /admin/creds body missing cred name"
+echo "$GW_BODY" | grep -q "sk-e2e-bogus" \
+  && fail "GET /admin/creds body must not contain the cred value" \
+  || pass "GET /admin/creds body does not leak cred value"
+
+# 4. Invalid service → 400; invalid name → 400
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST "http://localhost:${GATEWAY_PORT}/admin/creds" \
+  -H "Authorization: Bearer ${GATE_ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"test","service":"no-such-service","value":"v"}' 2>/dev/null)
+[[ "$status" == "400" ]] \
+  && pass "POST /admin/creds unknown service → 400" \
+  || fail "POST /admin/creds unknown service → expected 400, got $status"
+
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST "http://localhost:${GATEWAY_PORT}/admin/creds" \
+  -H "Authorization: Bearer ${GATE_ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"bad name!","service":"openai","value":"v"}' 2>/dev/null)
+[[ "$status" == "400" ]] \
+  && pass "POST /admin/creds invalid name chars → 400" \
+  || fail "POST /admin/creds invalid name → expected 400, got $status"
+
+# 5. Precedence: proxied request uses the registered cred (bogus), not env var.
+#    With the bogus key the request reaches upstream and should fail auth (401).
+#    We only assert it does NOT return 503 (missing-cred) — that would mean the
+#    store cred was not picked up. If no OPENAI_API_KEY env is set we can assert
+#    the proxied status is not 503 regardless.
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Bearer ${ALL_TOKEN}" \
+  "http://localhost:${GATEWAY_PORT}/openai/v1/models" 2>/dev/null)
+[[ "$status" == "503" ]] \
+  && fail "GET /openai/v1/models with registered bogus cred → got 503 (cred not picked up)" \
+  || pass "GET /openai/v1/models with registered bogus cred → cred picked up (status $status, not 503)"
+
+# 6. DELETE /admin/creds/openai → 204; GET no longer lists it; proxied request reverts.
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X DELETE "http://localhost:${GATEWAY_PORT}/admin/creds/openai" \
+  -H "Authorization: Bearer ${GATE_ADMIN_TOKEN}" 2>/dev/null)
+[[ "$status" == "204" ]] \
+  && pass "DELETE /admin/creds/openai → 204" \
+  || fail "DELETE /admin/creds/openai → expected 204, got $status"
+
+GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
+  "http://localhost:${GATEWAY_PORT}/admin/creds" \
+  -H "Authorization: Bearer ${GATE_ADMIN_TOKEN}" 2>/dev/null)
+GW_BODY=$(cat "$GW_TMPFILE")
+echo "$GW_BODY" | grep -q '"openai"' \
+  && fail "GET /admin/creds after delete still lists openai cred" \
+  || pass "GET /admin/creds after delete: openai cred no longer listed"
+
+# After deletion, reverts to env-var path:
+#   - no env key → 503; real env key → success (2xx).
+#   Match the existing live-test gating pattern.
+after_del_status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Bearer ${ALL_TOKEN}" \
+  "http://localhost:${GATEWAY_PORT}/openai/v1/models" 2>/dev/null)
+if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+  [[ "$after_del_status" == "503" ]] \
+    && pass "GET /openai after cred delete, no env key → 503 (reverted)" \
+    || fail "GET /openai after cred delete, no env key → expected 503, got $after_del_status"
+else
+  [[ "$after_del_status" == "200" ]] \
+    && pass "GET /openai after cred delete, env key present → 200 (reverted to env)" \
+    || fail "GET /openai after cred delete, env key present → expected 200, got $after_del_status"
+fi
+
+# 7. DELETE again → 204 (idempotent)
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X DELETE "http://localhost:${GATEWAY_PORT}/admin/creds/openai" \
+  -H "Authorization: Bearer ${GATE_ADMIN_TOKEN}" 2>/dev/null)
+[[ "$status" == "204" ]] \
+  && pass "DELETE /admin/creds/openai second time → 204 (idempotent)" \
+  || fail "DELETE /admin/creds/openai idempotent → expected 204, got $status"
+
+# 8. (No docker log access in this script; assertion skipped per task spec.)
+
+# 9. Token create with "creds" binding
+E2E_CRED_NAMES+=("gh-e2e")
+status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST "http://localhost:${GATEWAY_PORT}/admin/creds" \
+  -H "Authorization: Bearer ${GATE_ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"gh-e2e","service":"github","value":"ghp_e2e_bogus"}' 2>/dev/null)
+[[ "$status" == "204" ]] \
+  && pass "Register gh-e2e cred → 204" \
+  || fail "Register gh-e2e cred → expected 204, got $status"
+
+GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
+  -X POST "http://localhost:${GATEWAY_PORT}/admin/tokens" \
+  -H "Authorization: Bearer ${GATE_ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"e2e-cred-bound-token","scope":["github"],"creds":{"github":"gh-e2e"}}' 2>/dev/null)
+GW_BODY=$(cat "$GW_TMPFILE")
+[[ "$GW_STATUS" =~ ^(200|201)$ ]] \
+  && pass "POST /admin/tokens with creds binding → $GW_STATUS" \
+  || { fail "POST /admin/tokens with creds binding → expected 200/201, got $GW_STATUS"; echo "    Body: $(echo "$GW_BODY" | head -3)"; }
+if [[ "$GW_STATUS" =~ ^(200|201)$ ]]; then
+  BOUND_TOKEN_ID=$(echo "$GW_BODY" | jq -r '.id // empty')
+  [[ -n "$BOUND_TOKEN_ID" ]] && E2E_TOKEN_IDS+=("$BOUND_TOKEN_ID")
+fi
+
+# Unknown cred name → 400
+GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
+  -X POST "http://localhost:${GATEWAY_PORT}/admin/tokens" \
+  -H "Authorization: Bearer ${GATE_ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"e2e-cred-bad","scope":["github"],"creds":{"github":"does-not-exist"}}' 2>/dev/null)
+[[ "$GW_STATUS" == "400" ]] \
+  && pass "POST /admin/tokens with unknown cred name → 400" \
+  || fail "POST /admin/tokens with unknown cred name → expected 400, got $GW_STATUS"
+
+# Cleanup: revoke bound token and remove cred (cred cleanup via trap)
 
 section "E2E token cleanup"
 if revoke_e2e_tokens; then
