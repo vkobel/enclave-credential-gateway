@@ -106,7 +106,7 @@ async fn create_token(
     }
 
     let (record, token_value) = match registry
-        .create_token(req.name, req.scope, req.all_routes)
+        .create_token(req.name, req.scope, req.all_routes, Default::default())
         .await
     {
         Ok(created) => created,

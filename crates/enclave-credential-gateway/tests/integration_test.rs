@@ -762,7 +762,7 @@ mod registry_tests {
     async fn test_create_and_validate_token() {
         let (registry, _dir) = create_registry().await;
         let (record, token_value) = registry
-            .create_token("test".to_string(), vec![], true)
+            .create_token("test".to_string(), vec![], true, Default::default())
             .await
             .unwrap();
 
@@ -779,7 +779,7 @@ mod registry_tests {
     async fn test_wrong_token_fails_validation() {
         let (registry, _dir) = create_registry().await;
         registry
-            .create_token("test".to_string(), vec![], true)
+            .create_token("test".to_string(), vec![], true, Default::default())
             .await
             .unwrap();
 
@@ -791,7 +791,7 @@ mod registry_tests {
     async fn test_revoked_token_fails_validation() {
         let (registry, _dir) = create_registry().await;
         let (record, token_value) = registry
-            .create_token("test".to_string(), vec![], true)
+            .create_token("test".to_string(), vec![], true, Default::default())
             .await
             .unwrap();
 
@@ -813,11 +813,16 @@ mod registry_tests {
     async fn test_list_tokens_omits_token_value() {
         let (registry, _dir) = create_registry().await;
         registry
-            .create_token("laptop".to_string(), vec!["anthropic".to_string()], false)
+            .create_token(
+                "laptop".to_string(),
+                vec!["anthropic".to_string()],
+                false,
+                Default::default(),
+            )
             .await
             .unwrap();
         registry
-            .create_token("ci".to_string(), vec![], true)
+            .create_token("ci".to_string(), vec![], true, Default::default())
             .await
             .unwrap();
 
@@ -835,7 +840,7 @@ mod registry_tests {
         let token_value = {
             let registry = TokenRegistry::load_or_create(path.clone()).await.unwrap();
             let (_, token) = registry
-                .create_token("persist".to_string(), vec![], true)
+                .create_token("persist".to_string(), vec![], true, Default::default())
                 .await
                 .unwrap();
             token
@@ -849,7 +854,12 @@ mod registry_tests {
     async fn test_scope_enforcement() {
         let (registry, _dir) = create_registry().await;
         let (_record, scoped_token) = registry
-            .create_token("scoped".to_string(), vec!["openai".to_string()], false)
+            .create_token(
+                "scoped".to_string(),
+                vec!["openai".to_string()],
+                false,
+                Default::default(),
+            )
             .await
             .unwrap();
 
@@ -864,7 +874,7 @@ mod registry_tests {
     async fn test_empty_scope_allows_all_routes() {
         let (registry, _dir) = create_registry().await;
         let (_record, token) = registry
-            .create_token("all".to_string(), vec![], true)
+            .create_token("all".to_string(), vec![], true, Default::default())
             .await
             .unwrap();
 
@@ -878,12 +888,22 @@ mod registry_tests {
     async fn test_duplicate_token_name_is_rejected() {
         let (registry, _dir) = create_registry().await;
         registry
-            .create_token("laptop".to_string(), vec!["openai".to_string()], false)
+            .create_token(
+                "laptop".to_string(),
+                vec!["openai".to_string()],
+                false,
+                Default::default(),
+            )
             .await
             .unwrap();
 
         let error = registry
-            .create_token("laptop".to_string(), vec!["anthropic".to_string()], false)
+            .create_token(
+                "laptop".to_string(),
+                vec!["anthropic".to_string()],
+                false,
+                Default::default(),
+            )
             .await
             .unwrap_err();
 

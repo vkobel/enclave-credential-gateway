@@ -1,5 +1,6 @@
 //! Application state shared across handlers.
 
+use crate::credstore::CredStore;
 use crate::profile::{is_git_smart_http, RouteEntry, RouteMatcher};
 use crate::registry::TokenRegistry;
 use axum::body::Body;
@@ -15,6 +16,7 @@ pub struct AppState {
     pub phantom_token: Option<Zeroizing<String>>,
     pub token_registry: Option<Arc<TokenRegistry>>,
     pub admin_token: Zeroizing<String>,
+    pub cred_store: CredStore,
     pub routes: Vec<(String, RouteEntry)>,
     pub https_client: HttpsClient,
 }

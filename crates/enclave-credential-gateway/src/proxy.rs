@@ -1,7 +1,7 @@
 //! Reverse proxy handler.
 
 use crate::auth::PhantomAuth;
-use crate::profile::{CredentialSource, InjectMode};
+use crate::profile::{CredentialSource, InjectMode, RouteEntry};
 use crate::state::AppState;
 
 use axum::{
@@ -42,7 +42,7 @@ pub async fn proxy_handler(State(state): State<Arc<AppState>>, mut req: Request<
             token_record: None,
         });
 
-    let resolved = resolve_credential(&entry.credential_sources, phantom_auth.preferred_source);
+    let resolved = resolve_route_credential(&state, entry, &phantom_auth);
     let (src, credential) = match resolved {
         Some(r) => r,
         None => {
@@ -286,6 +286,58 @@ fn insert_extra_headers(headers: &mut axum::http::HeaderMap, src: &CredentialSou
     }
 }
 
+/// Resolve the upstream credential for a proxied request using the priority chain:
+///
+/// 1. Explicit per-token binding: if `phantom_auth.token_record` has a `creds`
+///    entry for the route, look up that name in the CredStore. If the binding
+///    exists but the name is absent from the store → `None` (hard failure, no
+///    fall-through). The first credential source is used for header formatting.
+/// 2. Service-default: `cred_store.get_for_service(route_id)` — a token whose
+///    name matches the route id and whose service field also matches. Falls
+///    through to rule 3 on miss.
+/// 3. Env-var path: existing `resolve_credential` behaviour.
+pub fn resolve_route_credential<'a>(
+    state: &'a AppState,
+    entry: &'a RouteEntry,
+    phantom_auth: &PhantomAuth,
+) -> Option<(&'a CredentialSource, String)> {
+    resolve_route_credential_with(&state.cred_store, entry, phantom_auth, |env| {
+        std::env::var(env).ok()
+    })
+}
+
+fn resolve_route_credential_with<'a>(
+    cred_store: &crate::credstore::CredStore,
+    entry: &'a RouteEntry,
+    phantom_auth: &PhantomAuth,
+    get_env: impl FnMut(&str) -> Option<String>,
+) -> Option<(&'a CredentialSource, String)> {
+    let route_id = entry.canonical_route.as_str();
+
+    // Rule 1: explicit per-token binding.
+    if let Some(record) = &phantom_auth.token_record {
+        if let Some(cred_name) = record.creds.get(route_id) {
+            // Binding exists — must resolve or fail; no fall-through.
+            let value = cred_store.get(cred_name)?;
+            let src = entry.credential_sources.first()?;
+            return Some((src, value));
+        }
+    }
+
+    // Rule 2: service-default (name == route_id and service matches).
+    if let Some(value) = cred_store.get_for_service(route_id) {
+        let src = entry.credential_sources.first()?;
+        return Some((src, value));
+    }
+
+    // Rule 3: env-var resolution (unchanged).
+    resolve_credential_with(
+        &entry.credential_sources,
+        phantom_auth.preferred_source,
+        get_env,
+    )
+}
+
 pub fn resolve_credential(
     sources: &[CredentialSource],
     preferred: Option<usize>,
@@ -324,14 +376,20 @@ fn resolve_credential_with(
 mod tests {
     use super::{
         insert_extra_headers, is_upgrade_request, remove_client_credential_headers,
-        resolve_credential_with,
+        resolve_credential_with, resolve_route_credential_with,
     };
-    use crate::profile::CredentialSource;
+    use crate::auth::PhantomAuth;
+    use crate::credstore::CredStore;
+    use crate::profile::{CredentialSource, InjectMode, RouteEntry, RouteMatcher};
+    use crate::registry::{TokenRecord, TokenStatus};
     use axum::{
         body::Body,
         http::{HeaderMap, HeaderValue, Request},
     };
+    use chrono::Utc;
     use std::collections::BTreeMap;
+    use uuid::Uuid;
+    use zeroize::Zeroizing;
 
     fn source(header: &str) -> CredentialSource {
         CredentialSource {
@@ -500,5 +558,179 @@ mod tests {
         .expect("credential should resolve");
 
         assert_eq!(resolved.0.inject_header, "Authorization");
+    }
+
+    // ---- resolve_route_credential_with tests ----
+
+    fn route_entry(canonical_route: &str) -> RouteEntry {
+        RouteEntry {
+            canonical_route: canonical_route.to_string(),
+            upstream: "https://example.com".to_string(),
+            credential_sources: vec![CredentialSource {
+                env: format!("{}_API_KEY", canonical_route.to_uppercase()),
+                inject_header: "authorization".to_string(),
+                format: "Bearer {}".to_string(),
+                prefix: None,
+                reject_prefixes: vec![],
+                extra_headers: BTreeMap::new(),
+                basic_user: None,
+            }],
+            strip_prefix: None,
+            inject_mode: InjectMode::Header,
+            url_path_prefix: None,
+            matcher: RouteMatcher::Prefix,
+        }
+    }
+
+    fn phantom_auth_no_record() -> PhantomAuth {
+        PhantomAuth {
+            header: "authorization".to_string(),
+            preferred_source: None,
+            token_record: None,
+        }
+    }
+
+    fn phantom_auth_with_binding(route: &str, cred_name: &str) -> PhantomAuth {
+        let mut creds = std::collections::HashMap::new();
+        creds.insert(route.to_string(), cred_name.to_string());
+        PhantomAuth {
+            header: "authorization".to_string(),
+            preferred_source: None,
+            token_record: Some(TokenRecord {
+                id: Uuid::new_v4(),
+                name: "test-token".to_string(),
+                scope: vec![route.to_string()],
+                all_routes: false,
+                created_at: Utc::now(),
+                status: TokenStatus::Active,
+                token_hash: "abc".to_string(),
+                creds,
+            }),
+        }
+    }
+
+    fn cred_store_with(entries: &[(&str, &str, &str)]) -> CredStore {
+        let store = CredStore::default();
+        for (name, service, value) in entries {
+            store.register(
+                name.to_string(),
+                service.to_string(),
+                Zeroizing::new(value.to_string()),
+            );
+        }
+        store
+    }
+
+    #[test]
+    fn env_fallback_when_store_empty() {
+        let store = CredStore::default();
+        let entry = route_entry("github");
+        let auth = phantom_auth_no_record();
+
+        let resolved = resolve_route_credential_with(&store, &entry, &auth, |env| match env {
+            "GITHUB_API_KEY" => Some("ghp_env_token".to_string()),
+            _ => None,
+        })
+        .expect("should resolve via env");
+
+        assert_eq!(resolved.1, "ghp_env_token");
+    }
+
+    #[test]
+    fn service_default_wins_over_env() {
+        let store = cred_store_with(&[("github", "github", "ghp_store_default")]);
+        let entry = route_entry("github");
+        let auth = phantom_auth_no_record();
+
+        let resolved = resolve_route_credential_with(&store, &entry, &auth, |env| match env {
+            "GITHUB_API_KEY" => Some("ghp_env_token".to_string()),
+            _ => None,
+        })
+        .expect("should resolve via service-default");
+
+        assert_eq!(resolved.1, "ghp_store_default");
+    }
+
+    #[test]
+    fn explicit_binding_wins_over_service_default_and_env() {
+        let store = cred_store_with(&[
+            ("github", "github", "ghp_service_default"),
+            ("gh-prod", "github", "ghp_explicit"),
+        ]);
+        let entry = route_entry("github");
+        let auth = phantom_auth_with_binding("github", "gh-prod");
+
+        let resolved = resolve_route_credential_with(&store, &entry, &auth, |env| match env {
+            "GITHUB_API_KEY" => Some("ghp_env_token".to_string()),
+            _ => None,
+        })
+        .expect("should resolve via explicit binding");
+
+        assert_eq!(resolved.1, "ghp_explicit");
+    }
+
+    #[test]
+    fn explicit_binding_missing_from_store_returns_none_even_when_env_would_resolve() {
+        let store = CredStore::default(); // gh-prod not registered
+        let entry = route_entry("github");
+        let auth = phantom_auth_with_binding("github", "gh-prod");
+
+        let resolved = resolve_route_credential_with(&store, &entry, &auth, |env| match env {
+            "GITHUB_API_KEY" => Some("ghp_env_token".to_string()),
+            _ => None,
+        });
+
+        assert!(
+            resolved.is_none(),
+            "binding exists but cred absent: must not fall through to env"
+        );
+    }
+
+    #[test]
+    fn after_remove_service_default_falls_back_to_env() {
+        let store = cred_store_with(&[("github", "github", "ghp_store_default")]);
+        store.remove("github");
+        let entry = route_entry("github");
+        let auth = phantom_auth_no_record();
+
+        let resolved = resolve_route_credential_with(&store, &entry, &auth, |env| match env {
+            "GITHUB_API_KEY" => Some("ghp_env_token".to_string()),
+            _ => None,
+        })
+        .expect("should fall back to env after remove");
+
+        assert_eq!(resolved.1, "ghp_env_token");
+    }
+
+    #[test]
+    fn after_remove_explicit_binding_also_falls_back_to_none() {
+        // Token has an explicit binding "gh-prod" → "github", but gh-prod was removed.
+        let store = cred_store_with(&[("gh-prod", "github", "ghp_explicit")]);
+        store.remove("gh-prod");
+        let entry = route_entry("github");
+        let auth = phantom_auth_with_binding("github", "gh-prod");
+
+        let resolved = resolve_route_credential_with(&store, &entry, &auth, |env| match env {
+            "GITHUB_API_KEY" => Some("ghp_env_token".to_string()),
+            _ => None,
+        });
+
+        assert!(resolved.is_none(), "removed binding must not fall through");
+    }
+
+    #[test]
+    fn service_default_only_matches_name_equal_to_route_id() {
+        // "gh-prod" is bound to "github" service but its name != "github".
+        let store = cred_store_with(&[("gh-prod", "github", "ghp_named")]);
+        let entry = route_entry("github");
+        let auth = phantom_auth_no_record();
+
+        // No explicit binding, no service-default (name≠route), no env → None.
+        let resolved = resolve_route_credential_with(&store, &entry, &auth, |_env| None);
+
+        assert!(
+            resolved.is_none(),
+            "service-default must require name == route_id"
+        );
     }
 }
