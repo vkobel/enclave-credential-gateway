@@ -224,6 +224,7 @@ async fn revoke_token(State(state): State<Arc<AppState>>, Path(id): Path<Uuid>) 
     }
 }
 
+// POST is an upsert: re-registering an existing name overwrites the value (rotation).
 async fn register_cred(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RegisterCredRequest>,
@@ -265,7 +266,9 @@ async fn list_creds(State(state): State<Arc<AppState>>) -> Response {
 }
 
 async fn delete_cred(State(state): State<Arc<AppState>>, Path(name): Path<String>) -> Response {
+    // 204 regardless of presence: idempotent delete (vs tokens' 404) is deliberate.
     state.cred_store.remove(&name);
+    info!("deleted cred name='{}'", name);
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -344,11 +347,20 @@ fn validate_token_creds(
                 route
             ));
         }
-        if cred_store.get(cred_name).is_none() {
-            return Err(format!(
-                "creds entry '{}' → '{}': cred name not found in store",
-                route, cred_name
-            ));
+        match cred_store.service_of(cred_name) {
+            None => {
+                return Err(format!(
+                    "creds entry '{}' → '{}': cred name not found in store",
+                    route, cred_name
+                ));
+            }
+            Some(ref stored_service) if stored_service != route => {
+                return Err(format!(
+                    "creds entry '{}' → '{}': cred is for service '{}', not '{}'",
+                    route, cred_name, stored_service, route
+                ));
+            }
+            _ => {}
         }
     }
     Ok(())
@@ -491,5 +503,26 @@ mod tests {
         let store = make_store(&[("sk-prod", "openai", "sk-real")]);
         let creds: HashMap<String, String> = [("openai".to_string(), "sk-prod".to_string())].into();
         validate_token_creds(&creds, &["openai".to_string()], false, &store).unwrap();
+    }
+
+    #[test]
+    fn validate_token_creds_rejects_service_mismatch() {
+        // "gh-prod" is a github cred, but the token scope/key is "openai"
+        let store = make_store(&[("gh-prod", "github", "ghp_secret")]);
+        let creds: HashMap<String, String> = [("openai".to_string(), "gh-prod".to_string())].into();
+        let error =
+            validate_token_creds(&creds, &["openai".to_string()], false, &store).unwrap_err();
+        assert!(
+            error.contains("gh-prod"),
+            "error should name the offending entry; got: {error}"
+        );
+        assert!(
+            error.contains("github"),
+            "error should name the actual service; got: {error}"
+        );
+        assert!(
+            error.contains("openai"),
+            "error should name the expected service; got: {error}"
+        );
     }
 }

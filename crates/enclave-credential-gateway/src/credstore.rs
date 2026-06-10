@@ -37,6 +37,23 @@ impl CredStore {
         map.get(name).map(|t| t.value.as_str().to_string())
     }
 
+    /// Return the token value only if its `service` field matches `expected_service`.
+    /// Returns `None` when the name is absent **or** the service does not match.
+    /// Never returns the value on a service mismatch.
+    pub fn get_checked(&self, name: &str, expected_service: &str) -> Option<String> {
+        let map = self.inner.read().expect("credstore read lock poisoned");
+        map.get(name)
+            .filter(|t| t.service == expected_service)
+            .map(|t| t.value.as_str().to_string())
+    }
+
+    /// Return the `service` field for the named token, or `None` if absent.
+    /// Never returns the token value.
+    pub fn service_of(&self, name: &str) -> Option<String> {
+        let map = self.inner.read().expect("credstore read lock poisoned");
+        map.get(name).map(|t| t.service.clone())
+    }
+
     /// Convenience: return the value of the token whose **name equals `service`**,
     /// provided its `service` field also matches `service`. Used as resolution
     /// rule 2 (service-default): a well-known name such as "github" resolves
@@ -145,5 +162,38 @@ mod tests {
         // name == "github" but service is "openai" — verify field check
         let store = store_with(&[("github", "openai", "sk-wrong")]);
         assert!(store.get_for_service("github").is_none());
+    }
+
+    #[test]
+    fn service_of_returns_service_for_registered_name() {
+        let store = store_with(&[("gh-prod", "github", "ghp_secret")]);
+        assert_eq!(store.service_of("gh-prod").as_deref(), Some("github"));
+    }
+
+    #[test]
+    fn service_of_returns_none_for_absent_name() {
+        let store = CredStore::default();
+        assert!(store.service_of("missing").is_none());
+    }
+
+    #[test]
+    fn get_checked_returns_value_when_service_matches() {
+        let store = store_with(&[("gh-prod", "github", "ghp_secret")]);
+        assert_eq!(
+            store.get_checked("gh-prod", "github").as_deref(),
+            Some("ghp_secret")
+        );
+    }
+
+    #[test]
+    fn get_checked_returns_none_on_service_mismatch() {
+        let store = store_with(&[("gh-prod", "github", "ghp_secret")]);
+        assert!(store.get_checked("gh-prod", "openai").is_none());
+    }
+
+    #[test]
+    fn get_checked_returns_none_for_absent_name() {
+        let store = CredStore::default();
+        assert!(store.get_checked("missing", "github").is_none());
     }
 }

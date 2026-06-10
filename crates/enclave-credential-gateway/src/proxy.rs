@@ -337,13 +337,25 @@ fn resolve_route_credential_with<'a>(
     if let Some(record) = &phantom_auth.token_record {
         if let Some(cred_name) = record.creds.get(route_id) {
             // Binding exists — must resolve or fail; no fall-through.
-            match cred_store.get(cred_name) {
+            // get_checked verifies service matches route, guarding against a cred
+            // being re-registered with a different service after binding.
+            match cred_store.get_checked(cred_name, route_id) {
                 None => {
-                    tracing::warn!(
-                        route = route_id,
-                        binding = %cred_name,
-                        "explicit credential binding is absent from the store"
-                    );
+                    // Covers both: name absent from store, and service mismatch after re-register.
+                    let stored_service = cred_store.service_of(cred_name);
+                    if stored_service.as_deref().is_some_and(|s| s != route_id) {
+                        tracing::warn!(
+                            route = route_id,
+                            binding = %cred_name,
+                            "explicit credential binding service mismatch after re-register"
+                        );
+                    } else {
+                        tracing::warn!(
+                            route = route_id,
+                            binding = %cred_name,
+                            "explicit credential binding is absent from the store"
+                        );
+                    }
                     return None;
                 }
                 Some(value) => {
@@ -856,6 +868,25 @@ mod tests {
         assert!(
             resolved.is_none(),
             "explicit binding with gate_ value must not be forwarded upstream"
+        );
+    }
+
+    #[test]
+    fn explicit_binding_service_mismatch_returns_none_does_not_fall_through_to_env() {
+        // Simulate a cred re-registered with a different service after binding.
+        // Token binds "github" → "gh-prod", but gh-prod is now an openai cred.
+        let store = cred_store_with(&[("gh-prod", "openai", "sk-openai")]);
+        let entry = route_entry("github");
+        let auth = phantom_auth_with_binding("github", "gh-prod");
+
+        let resolved = resolve_route_credential_with(&store, &entry, &auth, |env| match env {
+            "GITHUB_API_KEY" => Some("ghp_env_token".to_string()),
+            _ => None,
+        });
+
+        assert!(
+            resolved.is_none(),
+            "service mismatch on explicit binding must not fall through to env"
         );
     }
 
