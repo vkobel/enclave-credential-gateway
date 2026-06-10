@@ -34,6 +34,17 @@ export KEYMAKER_URL=https://<your-keymaker-deployment>
 
 1. Build the quorum keyring from operator public keys and mint the bundle:
 
+   Each operator's key must have both an **encryption subkey** and an **authentication
+   subkey**. The default `gpg --gen-key` flow does not add an auth subkey; use expert
+   mode to add one:
+
+   ```sh
+   gpg --expert --edit-key alice@example.com
+   # gpg> addkey → (11) ECC (set your own capabilities) → toggle Sign OFF, Auth ON → Curve 25519 → save
+   ```
+
+   Then export and create the bundle:
+
    ```sh
    gpg --export --armor alice@example.com  > keyring.asc
    gpg --export --armor bob@example.com   >> keyring.asc
@@ -46,11 +57,9 @@ export KEYMAKER_URL=https://<your-keymaker-deployment>
    ```sh
    jq -r '.secret_recipient_public_key' .caution/quorum-bundle.json > recipient.asc
    mkdir -p .caution/secrets
-   for NAME in GATE_ADMIN_TOKEN OPENAI_API_KEY ANTHROPIC_API_KEY GITHUB_TOKEN; do
-     printf '%s' "${!NAME}" | gpg --batch --yes --trust-model always \
-       --encrypt --armor --recipient-file recipient.asc \
-       --output ".caution/secrets/${NAME}.asc"
-   done
+   printf '%s' "$GATE_ADMIN_TOKEN" | gpg --batch --yes --trust-model always \
+     --encrypt --armor --recipient-file recipient.asc \
+     --output ".caution/secrets/GATE_ADMIN_TOKEN.asc"
    ```
 
    `.caution/quorum-bundle.json` and `.caution/secrets/*.asc` are safe to commit
