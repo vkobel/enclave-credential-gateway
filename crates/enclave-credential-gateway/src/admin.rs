@@ -356,7 +356,24 @@ fn validate_token_creds(
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_cred_name, validate_token_name, validate_token_scope};
+    use super::{
+        validate_cred_name, validate_token_creds, validate_token_name, validate_token_scope,
+    };
+    use crate::credstore::CredStore;
+    use std::collections::HashMap;
+    use zeroize::Zeroizing;
+
+    fn make_store(entries: &[(&str, &str, &str)]) -> CredStore {
+        let store = CredStore::default();
+        for (name, service, value) in entries {
+            store.register(
+                name.to_string(),
+                service.to_string(),
+                Zeroizing::new(value.to_string()),
+            );
+        }
+        store
+    }
 
     fn known_routes() -> Vec<String> {
         ["anthropic", "github", "openai"]
@@ -426,5 +443,53 @@ mod tests {
         for name in ["gh-prod", "gh_prod", "GH-PROD-1", "a", "A1-b_C"] {
             validate_cred_name(name).unwrap();
         }
+    }
+
+    #[test]
+    fn validate_token_creds_rejects_key_outside_scope() {
+        let store = make_store(&[("gh-prod", "github", "ghp_secret")]);
+        let creds: HashMap<String, String> = [("github".to_string(), "gh-prod".to_string())].into();
+        let error =
+            validate_token_creds(&creds, &["openai".to_string()], false, &store).unwrap_err();
+        assert!(
+            error.contains("github"),
+            "error should name the offending key; got: {error}"
+        );
+        assert!(
+            error.contains("not within the token scope"),
+            "unexpected message: {error}"
+        );
+    }
+
+    #[test]
+    fn validate_token_creds_allows_key_when_all_routes() {
+        let store = make_store(&[("gh-prod", "github", "ghp_secret")]);
+        let creds: HashMap<String, String> = [("github".to_string(), "gh-prod".to_string())].into();
+        // scope is empty but all_routes=true — key "github" is not in scope slice, yet must pass
+        validate_token_creds(&creds, &[], true, &store).unwrap();
+    }
+
+    #[test]
+    fn validate_token_creds_rejects_missing_cred_name() {
+        let store = make_store(&[]); // store is empty
+        let creds: HashMap<String, String> =
+            [("openai".to_string(), "nonexistent-cred".to_string())].into();
+        let error =
+            validate_token_creds(&creds, &["openai".to_string()], false, &store).unwrap_err();
+        assert!(
+            error.contains("nonexistent-cred"),
+            "error should name the missing cred; got: {error}"
+        );
+        assert!(
+            error.contains("not found in store"),
+            "unexpected message: {error}"
+        );
+    }
+
+    #[test]
+    fn validate_token_creds_accepts_valid_entry() {
+        let store = make_store(&[("sk-prod", "openai", "sk-real")]);
+        let creds: HashMap<String, String> = [("openai".to_string(), "sk-prod".to_string())].into();
+        validate_token_creds(&creds, &["openai".to_string()], false, &store).unwrap();
     }
 }
