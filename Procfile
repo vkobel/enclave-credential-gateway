@@ -27,9 +27,10 @@ ports: 8083
 http_port: 8083
 
 # --- Secrets -------------------------------------------------------------
-# Real upstream credentials + admin token must be decrypted ONLY inside the
-# enclave. Do NOT bake them into the image or this Procfile. Provision via
-# Locksmith: GATE_ADMIN_TOKEN, OPENAI_API_KEY, ANTHROPIC_API_KEY, GITHUB_TOKEN.
+# GATE_ADMIN_TOKEN must be decrypted only inside the enclave — provision it
+# via Locksmith. Upstream API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY,
+# GITHUB_TOKEN) are pushed at runtime via `gate admin creds register` over the
+# steve-encrypted channel; they never need to be in Locksmith.
 locksmith: true
 
 # --- Resources (defaults shown; fine for this proxy) ---------------------

@@ -13,9 +13,13 @@ and reconstituted in memory inside the attested enclave at boot.
 
 ## Secrets the gateway needs
 
-`GATE_ADMIN_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`.
+Only **`GATE_ADMIN_TOKEN`** needs Locksmith. Upstream API keys (`OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, `GITHUB_TOKEN`) are pushed at runtime via
+`gate admin creds register` over the steve-encrypted admin channel — they live in
+enclave RAM and never need to be provisioned at boot.
 
-Each becomes one `*.asc` file; the filename minus `.asc` is the env var name.
+Each Locksmith secret becomes one `*.asc` file; the filename minus `.asc` is the
+env var name.
 
 ## One-time: deploy keymaker
 
@@ -52,20 +56,13 @@ export KEYMAKER_URL=https://<your-keymaker-deployment>
    `.caution/quorum-bundle.json` and `.caution/secrets/*.asc` are safe to commit
    (encrypted to the enclave-only key). Plaintext values never enter the repo.
 
-3. Procfile — Locksmith on, no baked secrets, no debug:
+3. The repo's `Procfile` is already correct — `locksmith: true` and `e2e: true` are set.
+   No edits needed. The secrets provisioned here (`GATE_ADMIN_TOKEN`, etc.) are injected
+   by Caution at boot into the `run:` command's environment.
 
-   ```procfile
-   containerfile: Containerfile.stagex
-   run: GATE_TOKENS_FILE=/tokens.json /usr/bin/enclave-credential-gateway
-   app_sources: https://github.com/vkobel/enclave-credential-gateway/archive/${COMMIT}.tar.gz
-   http_port: 8080
-   ports: 8080
-   locksmith: true
-   ```
-
-   `GATE_TOKENS_FILE` is config, not a secret, so it stays inline. Caution injects the
-   locksmith binaries and the `.caution/` bundle/secrets into the rootfs; the four
-   secret vars are decrypted at boot and exported into the run command's environment.
+   Caution injects the locksmith binaries and the `.caution/` bundle/secrets into the
+   rootfs; the four secret vars are decrypted at boot and exported into the run
+   command's environment.
 
 4. Deploy and unlock:
 
