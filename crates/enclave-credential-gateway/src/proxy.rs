@@ -311,6 +311,12 @@ pub fn resolve_route_credential<'a>(
     })
 }
 
+fn source_accepts(src: &CredentialSource, value: &str) -> bool {
+    !value.is_empty()
+        && src.prefix.as_deref().is_none_or(|p| value.starts_with(p))
+        && !src.reject_prefixes.iter().any(|p| value.starts_with(p))
+}
+
 fn resolve_route_credential_with<'a>(
     cred_store: &crate::credstore::CredStore,
     entry: &'a RouteEntry,
@@ -319,19 +325,12 @@ fn resolve_route_credential_with<'a>(
 ) -> Option<(&'a CredentialSource, String)> {
     let route_id = entry.canonical_route.as_str();
 
-    // Shared predicate: same logic used by resolve_credential_with.
-    let matches = |src: &CredentialSource, v: &str| -> bool {
-        !v.is_empty()
-            && src.prefix.as_deref().is_none_or(|p| v.starts_with(p))
-            && !src.reject_prefixes.iter().any(|p| v.starts_with(p))
-    };
-
     // Selects the first credential source whose prefix/reject_prefixes accept `value`.
     let pick_source = |value: &str| -> Option<&'a CredentialSource> {
         entry
             .credential_sources
             .iter()
-            .find(|src| matches(src, value))
+            .find(|src| source_accepts(src, value))
     };
 
     // Rule 1: explicit per-token binding.
@@ -383,16 +382,10 @@ fn resolve_credential_with(
     preferred: Option<usize>,
     mut get_env: impl FnMut(&str) -> Option<String>,
 ) -> Option<(&CredentialSource, String)> {
-    let matches = |src: &CredentialSource, v: &str| -> bool {
-        !v.is_empty()
-            && src.prefix.as_deref().is_none_or(|p| v.starts_with(p))
-            && !src.reject_prefixes.iter().any(|p| v.starts_with(p))
-    };
-
     if let Some(i) = preferred {
         if let Some(src) = sources.get(i) {
             if let Some(v) = get_env(&src.env) {
-                if matches(src, &v) {
+                if source_accepts(src, &v) {
                     return Some((src, v));
                 }
             }
@@ -400,7 +393,7 @@ fn resolve_credential_with(
     }
     sources.iter().find_map(|src| {
         get_env(&src.env)
-            .filter(|v| matches(src, v))
+            .filter(|v| source_accepts(src, v))
             .map(|v| (src, v))
     })
 }
