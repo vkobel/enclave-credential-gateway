@@ -600,6 +600,148 @@ mod resolver_tests {
     }
 }
 
+/// Admin creds endpoint integration tests.
+///
+/// These tests are **opt-in** via the `integration` feature flag.
+/// Run with: `cargo test --features integration`
+///
+/// Prerequisites:
+///   - Gateway running on localhost:8080
+///   - `TEST_ADMIN_TOKEN` env var set to the gateway admin token
+mod admin_creds_tests {
+    use reqwest::StatusCode;
+
+    fn admin_token() -> String {
+        std::env::var("TEST_ADMIN_TOKEN")
+            .expect("TEST_ADMIN_TOKEN must be set for integration tests")
+    }
+
+    const BASE: &str = "http://localhost:8080";
+
+    #[tokio::test]
+    #[cfg_attr(
+        not(feature = "integration"),
+        ignore = "Requires running gateway. Run with: cargo test --features integration"
+    )]
+    async fn wrong_admin_token_returns_401() {
+        let client = reqwest::Client::new();
+        let res = client
+            .get(format!("{}/admin/creds", BASE))
+            .header("Authorization", "Bearer wrong-admin-token")
+            .send()
+            .await
+            .expect("Gateway not running");
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[cfg_attr(
+        not(feature = "integration"),
+        ignore = "Requires running gateway. Run with: cargo test --features integration"
+    )]
+    async fn register_list_delete_cred() {
+        let client = reqwest::Client::new();
+        let token = admin_token();
+
+        // Register a cred.
+        let res = client
+            .post(format!("{}/admin/creds", BASE))
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({
+                "name": "test-gh-cred",
+                "service": "github",
+                "value": "ghp_test_secret_value"
+            }))
+            .send()
+            .await
+            .expect("Gateway not running");
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+        // GET lists name + service; must NOT contain the value.
+        let res = client
+            .get(format!("{}/admin/creds", BASE))
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .expect("Gateway not running");
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.text().await.unwrap();
+        assert!(
+            body.contains("test-gh-cred"),
+            "expected cred name in list response"
+        );
+        assert!(body.contains("github"), "expected service in list response");
+        assert!(
+            !body.contains("ghp_test_secret_value"),
+            "value must not appear in list response"
+        );
+
+        // DELETE → 204.
+        let res = client
+            .delete(format!("{}/admin/creds/test-gh-cred", BASE))
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .expect("Gateway not running");
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+        // GET no longer lists it.
+        let res = client
+            .get(format!("{}/admin/creds", BASE))
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .expect("Gateway not running");
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.text().await.unwrap();
+        assert!(
+            !body.contains("test-gh-cred"),
+            "deleted cred must not appear in list"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg_attr(
+        not(feature = "integration"),
+        ignore = "Requires running gateway. Run with: cargo test --features integration"
+    )]
+    async fn delete_nonexistent_cred_is_idempotent() {
+        let client = reqwest::Client::new();
+        let token = admin_token();
+
+        let res = client
+            .delete(format!("{}/admin/creds/does-not-exist", BASE))
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .expect("Gateway not running");
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    #[cfg_attr(
+        not(feature = "integration"),
+        ignore = "Requires running gateway. Run with: cargo test --features integration"
+    )]
+    async fn create_token_with_unknown_cred_name_returns_400() {
+        let client = reqwest::Client::new();
+        let token = admin_token();
+
+        let res = client
+            .post(format!("{}/admin/tokens", BASE))
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({
+                "name": "test-token-bad-cred",
+                "scope": ["github"],
+                "creds": { "github": "nonexistent-cred" }
+            }))
+            .send()
+            .await
+            .expect("Gateway not running");
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
 /// Integration tests that require a running gateway.
 ///
 /// These tests are **opt-in** via the `integration` feature flag.

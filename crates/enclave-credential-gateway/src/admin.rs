@@ -12,11 +12,13 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Component, Path as FsPath};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 const UNRESTRICTED_SCOPE_WARNING: &str = "Empty token scope allows all current and future routes.";
 
@@ -27,6 +29,27 @@ pub struct CreateTokenRequest {
     pub scope: Vec<String>,
     #[serde(default)]
     pub all_routes: bool,
+    #[serde(default)]
+    pub creds: HashMap<String, String>,
+}
+
+/// Request body for `POST /admin/creds`. Does NOT derive Debug — value must never be printed.
+#[derive(Deserialize)]
+pub struct RegisterCredRequest {
+    pub name: String,
+    pub service: String,
+    pub value: String,
+}
+
+#[derive(Serialize)]
+struct CredEntry {
+    name: String,
+    service: String,
+}
+
+#[derive(Serialize)]
+struct CredListResponse {
+    creds: Vec<CredEntry>,
 }
 
 #[derive(Serialize)]
@@ -55,6 +78,8 @@ pub fn admin_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/admin/tokens", post(create_token).get(list_tokens))
         .route("/admin/tokens/{id}", delete(revoke_token))
+        .route("/admin/creds", post(register_cred).get(list_creds))
+        .route("/admin/creds/{name}", delete(delete_cred))
         .layer(axum::middleware::from_fn_with_state(
             state,
             admin_auth_middleware,
@@ -104,9 +129,14 @@ async fn create_token(
     if let Err(message) = validate_token_scope(&req.scope, req.all_routes, &known_routes) {
         return (StatusCode::BAD_REQUEST, message).into_response();
     }
+    if let Err(message) =
+        validate_token_creds(&req.creds, &req.scope, req.all_routes, &state.cred_store)
+    {
+        return (StatusCode::BAD_REQUEST, message).into_response();
+    }
 
     let (record, token_value) = match registry
-        .create_token(req.name, req.scope, req.all_routes, Default::default())
+        .create_token(req.name, req.scope, req.all_routes, req.creds)
         .await
     {
         Ok(created) => created,
@@ -194,6 +224,64 @@ async fn revoke_token(State(state): State<Arc<AppState>>, Path(id): Path<Uuid>) 
     }
 }
 
+async fn register_cred(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RegisterCredRequest>,
+) -> Response {
+    let known_routes = state.known_routes();
+    if let Err(message) = validate_cred_name(&req.name) {
+        return (StatusCode::BAD_REQUEST, message).into_response();
+    }
+    if !known_routes.contains(&req.service) {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!(
+                "unknown service '{}' (known: {})",
+                req.service,
+                known_routes.join(", ")
+            ),
+        )
+            .into_response();
+    }
+    let value = Zeroizing::new(req.value);
+    state
+        .cred_store
+        .register(req.name.clone(), req.service.clone(), value);
+    info!(
+        "registered cred name='{}' service='{}'",
+        req.name, req.service
+    );
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn list_creds(State(state): State<Arc<AppState>>) -> Response {
+    let creds = state
+        .cred_store
+        .list()
+        .into_iter()
+        .map(|(name, service)| CredEntry { name, service })
+        .collect();
+    Json(CredListResponse { creds }).into_response()
+}
+
+async fn delete_cred(State(state): State<Arc<AppState>>, Path(name): Path<String>) -> Response {
+    state.cred_store.remove(&name);
+    StatusCode::NO_CONTENT.into_response()
+}
+
+fn validate_cred_name(name: &str) -> Result<(), String> {
+    if name.is_empty() || name.len() > 128 {
+        return Err("cred name must be 1–128 characters".to_string());
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err("cred name must contain only [A-Za-z0-9_-]".to_string());
+    }
+    Ok(())
+}
+
 fn validate_token_name(name: &str) -> Result<(), String> {
     let mut components = FsPath::new(name).components();
     let first = components.next();
@@ -243,9 +331,32 @@ fn validate_token_scope(
     Ok(())
 }
 
+fn validate_token_creds(
+    creds: &HashMap<String, String>,
+    scope: &[String],
+    all_routes: bool,
+    cred_store: &crate::credstore::CredStore,
+) -> Result<(), String> {
+    for (route, cred_name) in creds {
+        if !all_routes && !scope.contains(route) {
+            return Err(format!(
+                "creds key '{}' is not within the token scope",
+                route
+            ));
+        }
+        if cred_store.get(cred_name).is_none() {
+            return Err(format!(
+                "creds entry '{}' → '{}': cred name not found in store",
+                route, cred_name
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{validate_token_name, validate_token_scope};
+    use super::{validate_cred_name, validate_token_name, validate_token_scope};
 
     fn known_routes() -> Vec<String> {
         ["anthropic", "github", "openai"]
@@ -282,5 +393,38 @@ mod tests {
     #[test]
     fn accepts_explicit_all_routes() {
         validate_token_scope(&[], true, &known_routes()).unwrap();
+    }
+
+    #[test]
+    fn cred_name_rejects_empty() {
+        let error = validate_cred_name("").unwrap_err();
+        assert!(error.contains("1–128"));
+    }
+
+    #[test]
+    fn cred_name_rejects_too_long() {
+        let long = "a".repeat(129);
+        let error = validate_cred_name(&long).unwrap_err();
+        assert!(error.contains("1–128"));
+    }
+
+    #[test]
+    fn cred_name_rejects_invalid_chars() {
+        for name in ["gh prod", "gh/prod", "gh.prod", "gh@prod"] {
+            let error = validate_cred_name(name).unwrap_err();
+            assert!(
+                error.contains("[A-Za-z0-9_-]"),
+                "expected char error for {:?}, got: {}",
+                name,
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn cred_name_accepts_valid() {
+        for name in ["gh-prod", "gh_prod", "GH-PROD-1", "a", "A1-b_C"] {
+            validate_cred_name(name).unwrap();
+        }
     }
 }
