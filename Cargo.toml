@@ -4,3 +4,6 @@ members = [
     "crates/enclave-credential-gateway",
     "crates/gate-cli",
 ]
+
+[workspace.dependencies]
+tracing = "0.1"

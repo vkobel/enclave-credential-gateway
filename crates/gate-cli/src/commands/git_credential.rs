@@ -104,6 +104,7 @@ mod tests {
             gateway_url: "https://gw.example.com".to_string(),
             admin_token: None,
             tokens,
+            ..Config::default()
         }
     }
 

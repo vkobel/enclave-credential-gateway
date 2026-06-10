@@ -1,8 +1,9 @@
-use crate::client::{admin_url, http_client};
 use crate::config::Config;
 use crate::secure_file::validate_path_component;
 use crate::tooling;
+use crate::transport::AdminTransport;
 use anyhow::{Context, Result};
+use reqwest::Method;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -39,35 +40,24 @@ pub async fn create(name: &str, scope: &[String], all_routes: bool) -> Result<()
     validate_scope(scope, all_routes)?;
 
     let config = Config::load()?;
-    let admin_token = config
-        .admin_token
-        .as_deref()
-        .context("admin_token not set in config")?;
+    let transport = AdminTransport::from_config(&config)?;
 
-    let url = admin_url(&config, "/admin/tokens");
-    let client = http_client();
+    let body = serde_json::to_value(CreateRequest {
+        name: name.to_string(),
+        scope: scope.to_vec(),
+        all_routes,
+    })?;
 
-    let resp = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", admin_token))
-        .json(&CreateRequest {
-            name: name.to_string(),
-            scope: scope.to_vec(),
-            all_routes,
-        })
-        .send()
+    let (status, text) = transport
+        .request(Method::POST, "/admin/tokens", Some(body))
         .await
         .context("Failed to connect to gateway")?;
 
-    if !resp.status().is_success() {
-        anyhow::bail!(
-            "Gateway returned {}: {}",
-            resp.status(),
-            resp.text().await.unwrap_or_default()
-        );
+    if !status.is_success() {
+        anyhow::bail!("Gateway returned {}: {}", status, text);
     }
 
-    let token_resp: TokenResponse = resp.json().await?;
+    let token_resp: TokenResponse = serde_json::from_str(&text)?;
 
     let mut config = Config::load()?;
     config.tokens.insert(
@@ -95,30 +85,18 @@ pub async fn create(name: &str, scope: &[String], all_routes: bool) -> Result<()
 
 pub async fn list() -> Result<()> {
     let config = Config::load()?;
-    let admin_token = config
-        .admin_token
-        .as_deref()
-        .context("admin_token not set in config")?;
+    let transport = AdminTransport::from_config(&config)?;
 
-    let url = admin_url(&config, "/admin/tokens");
-    let client = http_client();
-
-    let resp = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", admin_token))
-        .send()
+    let (status, text) = transport
+        .request(Method::GET, "/admin/tokens", None)
         .await
         .context("Failed to connect to gateway")?;
 
-    if !resp.status().is_success() {
-        anyhow::bail!(
-            "Gateway returned {}: {}",
-            resp.status(),
-            resp.text().await.unwrap_or_default()
-        );
+    if !status.is_success() {
+        anyhow::bail!("Gateway returned {}: {}", status, text);
     }
 
-    let tokens: Vec<TokenListEntry> = resp.json().await?;
+    let tokens: Vec<TokenListEntry> = serde_json::from_str(&text)?;
     if tokens.is_empty() {
         println!("No tokens found.");
         return Ok(());
@@ -232,51 +210,33 @@ mod tests {
 
 pub async fn revoke(name: &str) -> Result<()> {
     let config = Config::load()?;
-    let admin_token = config
-        .admin_token
-        .as_deref()
-        .context("admin_token not set in config")?;
+    let transport = AdminTransport::from_config(&config)?;
 
-    let url = admin_url(&config, "/admin/tokens");
-    let client = http_client();
-
-    let resp = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", admin_token))
-        .send()
+    let (status, text) = transport
+        .request(Method::GET, "/admin/tokens", None)
         .await
         .context("Failed to connect to gateway")?;
 
-    if !resp.status().is_success() {
-        anyhow::bail!(
-            "Gateway returned {}: {}",
-            resp.status(),
-            resp.text().await.unwrap_or_default()
-        );
+    if !status.is_success() {
+        anyhow::bail!("Gateway returned {}: {}", status, text);
     }
 
-    let tokens: Vec<TokenListEntry> = resp.json().await?;
+    let tokens: Vec<TokenListEntry> = serde_json::from_str(&text)?;
     let target = tokens
         .iter()
         .find(|t| t.name == name)
         .ok_or_else(|| anyhow::anyhow!("Token '{}' not found", name))?;
 
-    let revoke_url = admin_url(&config, &format!("/admin/tokens/{}", target.id));
-    let resp = client
-        .delete(&revoke_url)
-        .header("Authorization", format!("Bearer {}", admin_token))
-        .send()
+    let revoke_path = format!("/admin/tokens/{}", target.id);
+    let (status, text) = transport
+        .request(Method::DELETE, &revoke_path, None)
         .await
         .context("Failed to connect to gateway")?;
 
-    if resp.status().is_success() {
+    if status.is_success() {
         println!("Token '{}' revoked.", name);
     } else {
-        anyhow::bail!(
-            "Gateway returned {}: {}",
-            resp.status(),
-            resp.text().await.unwrap_or_default()
-        );
+        anyhow::bail!("Gateway returned {}: {}", status, text);
     }
     Ok(())
 }

@@ -7,6 +7,7 @@ mod secure_file;
 #[cfg(test)]
 mod test_support;
 mod tooling;
+mod transport;
 
 #[derive(Parser)]
 #[command(name = "gate", about = "Enclave Credential Gateway CLI")]
