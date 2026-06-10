@@ -98,8 +98,8 @@ Acceptance: a deployed gateway is reachable through Caution with PCRs that `caut
 ## Phase 3 - Attested Credentials and v1 Release
 
 - [ ] Add owner-direct attested credential injection over steve (`e2e: true`): `gate creds push` runs the verifier (PCR match), then sends credentials over steve's attestation-bound channel into enclave RAM. Replaces Locksmith for the solo operator; Locksmith remains the quorum/multi-operator path.
-- [ ] Add admin credential management endpoints that never return credential values.
-- [ ] Add `gate creds add/rotate/rm/ls`.
+- [x] Add admin credential management endpoints (`POST/GET/DELETE /admin/creds`) that never return credential values.
+- [x] Add `gate admin creds register/ls/rm`.
 - [ ] Add a heavier `gate verify --reproduce <gateway-url>` path that locally rebuilds the EIF (via Caution's `enclave-builder` or by shelling out to `caution verify`) and confirms the reproduced PCR0/PCR1/PCR2 match the live enclave before trusting it.
 - [ ] Write `docs/DEPLOY.md` for a complete Caution/Nitro deployment.
 - [ ] Extend e2e coverage for expiry, audit entries, redaction, and attested credential push.

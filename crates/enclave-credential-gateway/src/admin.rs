@@ -267,8 +267,10 @@ async fn list_creds(State(state): State<Arc<AppState>>) -> Response {
 
 async fn delete_cred(State(state): State<Arc<AppState>>, Path(name): Path<String>) -> Response {
     // 204 regardless of presence: idempotent delete (vs tokens' 404) is deliberate.
-    state.cred_store.remove(&name);
-    info!("deleted cred name='{}'", name);
+    let removed = state.cred_store.remove(&name);
+    if removed {
+        info!("deleted cred name='{}'", name);
+    }
     StatusCode::NO_CONTENT.into_response()
 }
 

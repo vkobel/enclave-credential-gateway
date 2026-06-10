@@ -358,10 +358,17 @@ fn resolve_route_credential_with<'a>(
                     }
                     return None;
                 }
-                Some(value) => {
-                    let src = pick_source(&value)?;
-                    return Some((src, value));
-                }
+                Some(value) => match pick_source(&value) {
+                    None => {
+                        tracing::warn!(
+                            route = route_id,
+                            cred_name = %cred_name,
+                            "explicit credential binding matched no credential source"
+                        );
+                        return None;
+                    }
+                    Some(src) => return Some((src, value)),
+                },
             }
         }
     }
@@ -370,8 +377,17 @@ fn resolve_route_credential_with<'a>(
     // A registered service token takes precedence over env; if its value matches
     // no source we return None rather than silently falling through to env.
     if let Some(value) = cred_store.get_for_service(route_id) {
-        let src = pick_source(&value)?;
-        return Some((src, value));
+        match pick_source(&value) {
+            None => {
+                tracing::warn!(
+                    route = route_id,
+                    cred_name = route_id,
+                    "service-default credential matched no credential source"
+                );
+                return None;
+            }
+            Some(src) => return Some((src, value)),
+        }
     }
 
     // Rule 3: env-var resolution (unchanged).

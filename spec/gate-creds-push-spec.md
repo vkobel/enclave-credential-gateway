@@ -2,7 +2,7 @@
 
 ## Goal
 
-Register and rotate named upstream API keys at runtime via the admin API, without redeployment. Credentials live in enclave RAM only. Env vars remain as fallback. No PSK — `GATE_ADMIN_TOKEN` is a vanilla Locksmith-provisioned bearer token verified constant-time per request.
+Register and rotate named upstream API keys at runtime via the admin API, without redeployment. Credentials live in enclave RAM only — they are not persisted to disk; after a gateway restart all credentials must be re-registered, and phantom tokens with explicit `--cred` bindings hard-fail with 503 until the named credential is re-registered. Env vars remain as fallback. No PSK — `GATE_ADMIN_TOKEN` is a vanilla Locksmith-provisioned bearer token verified constant-time per request.
 
 ---
 

@@ -90,12 +90,13 @@ enum TokenAction {
 
 #[derive(Subcommand)]
 enum CredsAction {
-    /// Register a service credential (value sent over the encrypted admin channel)
+    /// Register a service credential (value sent over the encrypted admin channel).
+    /// When <value> is omitted the secret is read from stdin (one line, trailing newline stripped).
     Register {
         /// Service this credential belongs to (e.g. openai, github)
         service: String,
-        /// The secret credential value
-        value: String,
+        /// The secret credential value; omit to read from stdin
+        value: Option<String>,
         /// Name for this credential; defaults to <service>
         #[arg(long)]
         name: Option<String>,
@@ -152,6 +153,16 @@ async fn main() -> anyhow::Result<()> {
                     value,
                     name,
                 } => {
+                    let value = match value {
+                        Some(v) => v,
+                        None => {
+                            let mut line = String::new();
+                            std::io::stdin().read_line(&mut line)?;
+                            line.trim_end_matches('\n')
+                                .trim_end_matches('\r')
+                                .to_string()
+                        }
+                    };
                     let name = name.unwrap_or_else(|| service.clone());
                     commands::creds::register(&name, &service, &value).await?
                 }

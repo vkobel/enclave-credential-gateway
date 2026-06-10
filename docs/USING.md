@@ -182,6 +182,12 @@ gh repo list
 
 ---
 
+## Service credentials
+
+Registered credentials are RAM-only — after a gateway restart they must be re-registered via `gate admin creds register`, and phantom tokens with explicit `--cred` bindings hard-fail with 503 until the named credential is re-registered.
+
+---
+
 ## Admin channel (steve E2E encryption)
 
 Admin commands (`gate admin creds ...`, `gate admin token ...`) are sent over the steve-encrypted channel by default. Required config:
