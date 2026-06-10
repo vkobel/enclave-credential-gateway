@@ -55,7 +55,7 @@ export KEYMAKER_URL=https://<your-keymaker-deployment>
 2. Encrypt secrets to the bundle recipient:
 
    ```sh
-   jq -r '.secret_recipient_public_key' .caution/quorum-bundle.json > recipient.asc
+   jq -r '.public_key' .caution/quorum-bundle.json > recipient.asc
    mkdir -p .caution/secrets
    printf '%s' "$GATE_ADMIN_TOKEN" | gpg --batch --yes --trust-model always \
      --encrypt --armor --recipient-file recipient.asc \
