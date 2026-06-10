@@ -22,7 +22,7 @@ Locksmith provisions `GATE_ADMIN_TOKEN` at enclave boot; the host never sees it.
 
 `POST` is an upsert (rotation). Validation: `name` must match `[A-Za-z0-9_-]`, 1–128 chars; `service` must be a known route (`openai`, `anthropic`, `github`).
 
-`POST /admin/tokens` accepts an optional `"creds": {"<route>": "<cred_name>"}` field to bind named creds to the token. Returns 400 if the cred name is not in the store, or its service does not match the route.
+`POST /admin/tokens` accepts an optional `"creds": {"<route>": "<cred_name>"}` field to bind named creds to the token. Returns 400 if the cred name is not in the store, its service does not match the route, or any `creds` key names a route not included in the token's scope.
 
 ---
 

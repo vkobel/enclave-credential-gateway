@@ -100,9 +100,9 @@ cleanup() {
   else
     info "Tearing down gateway"
     if [[ -n "$COMPOSE_OVERRIDE" ]]; then
-      docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml -f "$COMPOSE_OVERRIDE" down --remove-orphans 2>/dev/null || true
+      docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml -f "$COMPOSE_OVERRIDE" down -v --remove-orphans 2>/dev/null || true
     else
-      docker compose -p "$COMPOSE_PROJECT" down --remove-orphans 2>/dev/null || true
+      docker compose -p "$COMPOSE_PROJECT" down -v --remove-orphans 2>/dev/null || true
     fi
   fi
   [[ -n "$COMPOSE_OVERRIDE" && -f "$COMPOSE_OVERRIDE" ]] && rm -f "$COMPOSE_OVERRIDE"
@@ -731,15 +731,21 @@ status=$(curl -s -o /dev/null -w "%{http_code}" \
 
 # 5. Precedence: proxied request uses the registered cred (bogus), not env var.
 #    With the bogus key the request reaches upstream and should fail auth (401).
-#    We only assert it does NOT return 503 (missing-cred) — that would mean the
-#    store cred was not picked up. If no OPENAI_API_KEY env is set we can assert
-#    the proxied status is not 503 regardless.
-status=$(curl -s -o /dev/null -w "%{http_code}" \
-  -H "Authorization: Bearer ${ALL_TOKEN}" \
+#    When OPENAI_API_KEY is set in the environment the registered cred must still
+#    win (401, not 200) — a 200 would mean the env key was used instead.
+#    When OPENAI_API_KEY is not set we just assert the cred was picked up (not 503).
+prec_status=$(curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Bearer ${OPENAI_SCOPED_TOKEN}" \
   "http://localhost:${GATEWAY_PORT}/openai/v1/models" 2>/dev/null)
-[[ "$status" == "503" ]] \
-  && fail "GET /openai/v1/models with registered bogus cred → got 503 (cred not picked up)" \
-  || pass "GET /openai/v1/models with registered bogus cred → cred picked up (status $status, not 503)"
+if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+  [[ "$prec_status" == "401" ]] \
+    && pass "GET /openai/v1/models with registered bogus cred, env key set → 401 (registered cred wins)" \
+    || fail "GET /openai/v1/models with registered bogus cred, env key set → expected 401 (cred must win), got $prec_status"
+else
+  [[ "$prec_status" == "503" ]] \
+    && fail "GET /openai/v1/models with registered bogus cred → got 503 (cred not picked up)" \
+    || pass "GET /openai/v1/models with registered bogus cred → cred picked up (status $prec_status, not 503)"
+fi
 
 # 6. DELETE /admin/creds/openai → 204; GET no longer lists it; proxied request reverts.
 status=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -761,7 +767,7 @@ echo "$GW_BODY" | grep -q '"openai"' \
 #   - no env key → 503; real env key → success (2xx).
 #   Match the existing live-test gating pattern.
 after_del_status=$(curl -s -o /dev/null -w "%{http_code}" \
-  -H "Authorization: Bearer ${ALL_TOKEN}" \
+  -H "Authorization: Bearer ${OPENAI_SCOPED_TOKEN}" \
   "http://localhost:${GATEWAY_PORT}/openai/v1/models" 2>/dev/null)
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then
   [[ "$after_del_status" == "503" ]] \
