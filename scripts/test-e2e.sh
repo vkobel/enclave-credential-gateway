@@ -23,6 +23,7 @@ E2E_ALL_NAME="${E2E_ALL_NAME:-e2e-all-$$}"
 E2E_OPENAI_NAME="${E2E_OPENAI_NAME:-e2e-openai-$$}"
 E2E_GITHUB_NAME="${E2E_GITHUB_NAME:-e2e-github-$$}"
 E2E_REVOKED_NAME="${E2E_REVOKED_NAME:-e2e-revoked-$$}"
+E2E_CRED_BOUND_NAME="${E2E_CRED_BOUND_NAME:-e2e-cred-bound-$$}"
 REAL_HOME="${HOME:-}"
 PASS=0; FAIL=0; SKIP=0
 GW_ALREADY_RUNNING=false
@@ -804,7 +805,7 @@ GW_STATUS=$(curl -s -o "$GW_TMPFILE" -w "%{http_code}" \
   -X POST "http://localhost:${GATEWAY_PORT}/admin/tokens" \
   -H "Authorization: Bearer ${GATE_ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"name":"e2e-cred-bound-token","scope":["github"],"creds":{"github":"gh-e2e"}}' 2>/dev/null)
+  -d "{\"name\":\"${E2E_CRED_BOUND_NAME}\",\"scope\":[\"github\"],\"creds\":{\"github\":\"gh-e2e\"}}" 2>/dev/null)
 GW_BODY=$(cat "$GW_TMPFILE")
 [[ "$GW_STATUS" =~ ^(200|201)$ ]] \
   && pass "POST /admin/tokens with creds binding → $GW_STATUS" \
