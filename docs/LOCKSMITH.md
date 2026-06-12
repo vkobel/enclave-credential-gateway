@@ -32,53 +32,78 @@ export KEYMAKER_URL=https://<your-keymaker-deployment>
 
 ## Per-deployment
 
-1. Build the quorum keyring from operator public keys and mint the bundle:
+### 1. Build the keyring and mint the quorum bundle
 
-   Each operator's key must have both an **encryption subkey** and an **authentication
-   subkey**. The default `gpg --gen-key` flow does not add an auth subkey; use expert
-   mode to add one:
+Each operator exports their public key into a single `keyring.asc` file, then
+`caution secret new` contacts the keymaker and writes `.caution/quorum-bundle.json`.
 
-   ```sh
-   gpg --expert --edit-key alice@example.com
-   # gpg> addkey → (11) ECC (set your own capabilities) → toggle Sign OFF, Auth ON → Curve 25519 → save
-   ```
+**Solo operator (threshold 1 of 1):**
 
-   Then export and create the bundle:
+```sh
+gpg --export --armor you@example.com > keyring.asc
+export KEYMAKER_URL=http://<your-keymaker-deployment>
+caution secret new keyring.asc --threshold 1 --max 1
+# → writes .caution/quorum-bundle.json
+```
 
-   ```sh
-   gpg --export --armor alice@example.com  > keyring.asc
-   gpg --export --armor bob@example.com   >> keyring.asc
-   gpg --export --armor carol@example.com >> keyring.asc
-   caution secret new keyring.asc --threshold 2 --max 3   # writes .caution/quorum-bundle.json
-   ```
+**Multi-operator quorum (e.g. 2 of 3):**
 
-2. Encrypt secrets to the bundle recipient:
+Each operator's key must have a **signing subkey**, an **encryption subkey**, and an
+**authentication subkey**. The default `gpg --gen-key` produces only signing and
+encryption — add an auth subkey in expert mode:
 
-   ```sh
-   jq -r '.public_key' .caution/quorum-bundle.json > recipient.asc
-   mkdir -p .caution/secrets
-   printf '%s' "$GATE_ADMIN_TOKEN" | gpg --batch --yes --trust-model always \
-     --encrypt --armor --recipient-file recipient.asc \
-     --output ".caution/secrets/GATE_ADMIN_TOKEN.asc"
-   ```
+```sh
+gpg --expert --edit-key alice@example.com
+# gpg> addkey → (11) ECC (set your own capabilities) → toggle Sign OFF, Auth ON → Curve 25519 → save
+```
 
-   `.caution/quorum-bundle.json` and `.caution/secrets/*.asc` are safe to commit
-   (encrypted to the enclave-only key). Plaintext values never enter the repo.
+If any key is missing one of the three capabilities, `caution secret new` will reject
+the keyring with a "no Keymaker-eligible certificates" error.
 
-3. The repo's `Procfile` is already correct — `locksmith: true` and `e2e: true` are set.
-   No edits needed. The secrets provisioned here (`GATE_ADMIN_TOKEN`, etc.) are injected
-   by Caution at boot into the `run:` command's environment.
+Then build the keyring and mint the bundle:
 
-   Caution injects the locksmith binaries and the `.caution/` bundle/secrets into the
-   rootfs; the four secret vars are decrypted at boot and exported into the run
-   command's environment.
+```sh
+gpg --export --armor alice@example.com  > keyring.asc
+gpg --export --armor bob@example.com   >> keyring.asc
+gpg --export --armor carol@example.com >> keyring.asc
+caution secret new keyring.asc --threshold 2 --max 3
+# → writes .caution/quorum-bundle.json
+```
 
-4. Deploy and unlock:
+### 2. Encrypt secrets
 
-   ```sh
-   git push caution main      # enclave boots, waits on TCP 49504
-   caution secret send-shard  # each operator, with their smartcard, until threshold met
-   ```
+Put plaintext values in `.env` (already gitignored):
+
+```sh
+# .env
+GATE_ADMIN_TOKEN="my-super-secret-gate-admin-token"
+```
+
+Then encrypt all vars in `.env` to the bundle's recipient key in one command:
+
+```sh
+caution secret encrypt
+# → writes .caution/secrets/GATE_ADMIN_TOKEN.asc (one file per var)
+```
+
+`.caution/quorum-bundle.json` and `.caution/secrets/*.asc` are safe to commit —
+they are encrypted to the enclave-only key. Plaintext values never enter the repo.
+
+```sh
+git add .caution/
+git commit -m "add quorum bundle and encrypted secrets"
+```
+
+### 3. Deploy and unlock
+
+The `Procfile` is already correct — `locksmith: true` and `e2e: true` are set.
+Caution injects the bundle and encrypted secrets into the rootfs; they are
+decrypted at boot and exported into the `run:` command's environment.
+
+```sh
+git push caution main      # enclave boots, waits on TCP 49504
+caution secret send-shard  # each operator taps their smartcard until threshold met
+```
 
 ## Rules
 
