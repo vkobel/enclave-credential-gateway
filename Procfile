@@ -42,3 +42,6 @@ domain: gate.kobl.one
 # steve handles /e2p/* on port 49500; the admin CLI uses it for encrypted admin ops.
 e2e: true
 # debug: false   # NEVER true in prod: zeros PCRs and opens SSH on port 22.
+
+debug: true
+ssh_keys: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDRFl45BU5fsL5LzW7O7R/EpxQZqtEXROS8nUltSU0uW
