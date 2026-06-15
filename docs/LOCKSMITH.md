@@ -96,9 +96,15 @@ git commit -m "add quorum bundle and encrypted secrets"
 
 ### 3. Deploy and unlock
 
-The `Procfile` is already correct — `locksmith: true` and `e2e: true` are set.
-Caution injects the bundle and encrypted secrets into the rootfs; they are
-decrypted at boot and exported into the `run:` command's environment.
+The `Procfile` is already correct — `locksmith: true` and `e2e: true` are set, and
+`binary:` is unset. `Containerfile.stagex` bakes the encrypted bundle and secrets into
+the image, so the full image becomes the enclave rootfs; `locksmithd` decrypts them at
+boot and exports the values into the `run:` command's environment.
+
+> **Warning:** do not add `binary:` to the `Procfile` when using Locksmith. `binary:`
+> extracts only the named gateway binary and drops `/etc/caution/`, so the bundle never
+> reaches the rootfs and `locksmithd` panics at boot with
+> `has bundle: No such file or directory`. Deploy via `containerfile:`.
 
 ```sh
 git push caution main      # enclave boots, waits on TCP 49504
@@ -113,4 +119,6 @@ caution secret send-shard  # each operator taps their smartcard until threshold 
 - The master secret lives only in enclave RAM. Every reboot, redeploy, or instance
   replacement requires shard-holders to `send-shard` again. Keep `threshold` ≤ the
   number of operators reliably on call.
-- The `Containerfile.stagex` server stage bakes no secrets and needs no change.
+- The `Containerfile.stagex` server stage `ADD`s the bundle and encrypted secrets to
+  `/etc/caution/`. They are encrypted to the enclave-only key, so baking them in is safe.
+  No plaintext secrets are baked in.

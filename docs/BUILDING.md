@@ -131,7 +131,7 @@ StageX image into a confidential enclave and measures it. Caution's current TEE 
 is AWS Nitro Enclaves; Caution plans to support additional TEEs, so prefer the
 Caution-level commands and concepts over substrate-specific details.
 
-The deployment is described by the repo's `Procfile` (`containerfile`, `binary`/`run`,
+The deployment is described by the repo's `Procfile` (`containerfile`, `run`,
 `app_sources`, `http_port`, `locksmith`). Caution substitutes `${COMMIT}` so the build
 is pinned to source.
 
