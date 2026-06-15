@@ -9,8 +9,12 @@ containerfile: Containerfile.stagex
 
 # The server stage is a fully static (crt-static musl) binary on `scratch` with
 # TLS roots compiled in (webpki-roots), so upstream HTTPS needs no CA bundle.
-# Extract just the binary so PCR2 measures only the gateway, nothing else.
-binary: /usr/bin/enclave-credential-gateway
+# NOTE: do NOT use `binary:` here. With locksmith the EIF rootfs must also carry
+# /etc/caution/bundle.json + /etc/caution/secrets/ (ADDed in Containerfile.stagex).
+# `binary:` extracts only the named file and drops the rest of the image, so
+# locksmithd would panic "has bundle: No such file or directory". Building from
+# the full `containerfile:` image keeps the scratch rootfs minimal (static binary
+# + bundle + encrypted secrets) and lets PCR2 measure the bundle too.
 # GATE_LISTEN_PORT=8083 because steve (e2e) forwards decrypted traffic to the
 # hardcoded upstream 127.0.0.1:8083 — the gateway must listen there.
 run: GATE_LISTEN_PORT=8083 /usr/bin/enclave-credential-gateway
