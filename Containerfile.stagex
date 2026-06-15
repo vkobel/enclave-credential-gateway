@@ -33,5 +33,11 @@ EOF
 
 FROM scratch AS server
 COPY --from=build /rootfs/ /
+# Locksmith quorum bundle + encrypted secrets. `locksmith: true` does NOT inject
+# these — locksmithd reads /etc/caution/bundle.json at boot and panics if absent.
+# They are encrypted to the enclave-only key, so baking them into the measured
+# image is safe and lets PCR2 cover them as part of the reproducible build.
+ADD .caution/quorum-bundle.json /etc/caution/bundle.json
+ADD .caution/secrets/ /etc/caution/secrets/
 EXPOSE 8080
 ENTRYPOINT ["/usr/bin/enclave-credential-gateway"]
