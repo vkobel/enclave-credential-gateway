@@ -600,6 +600,148 @@ mod resolver_tests {
     }
 }
 
+/// Admin creds endpoint integration tests.
+///
+/// These tests are **opt-in** via the `integration` feature flag.
+/// Run with: `cargo test --features integration`
+///
+/// Prerequisites:
+///   - Gateway running on localhost:8080
+///   - `TEST_ADMIN_TOKEN` env var set to the gateway admin token
+mod admin_creds_tests {
+    use reqwest::StatusCode;
+
+    fn admin_token() -> String {
+        std::env::var("TEST_ADMIN_TOKEN")
+            .expect("TEST_ADMIN_TOKEN must be set for integration tests")
+    }
+
+    const BASE: &str = "http://localhost:8080";
+
+    #[tokio::test]
+    #[cfg_attr(
+        not(feature = "integration"),
+        ignore = "Requires running gateway. Run with: cargo test --features integration"
+    )]
+    async fn wrong_admin_token_returns_401() {
+        let client = reqwest::Client::new();
+        let res = client
+            .get(format!("{}/admin/creds", BASE))
+            .header("Authorization", "Bearer wrong-admin-token")
+            .send()
+            .await
+            .expect("Gateway not running");
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[cfg_attr(
+        not(feature = "integration"),
+        ignore = "Requires running gateway. Run with: cargo test --features integration"
+    )]
+    async fn register_list_delete_cred() {
+        let client = reqwest::Client::new();
+        let token = admin_token();
+
+        // Register a cred.
+        let res = client
+            .post(format!("{}/admin/creds", BASE))
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({
+                "name": "test-gh-cred",
+                "service": "github",
+                "value": "ghp_test_secret_value"
+            }))
+            .send()
+            .await
+            .expect("Gateway not running");
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+        // GET lists name + service; must NOT contain the value.
+        let res = client
+            .get(format!("{}/admin/creds", BASE))
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .expect("Gateway not running");
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.text().await.unwrap();
+        assert!(
+            body.contains("test-gh-cred"),
+            "expected cred name in list response"
+        );
+        assert!(body.contains("github"), "expected service in list response");
+        assert!(
+            !body.contains("ghp_test_secret_value"),
+            "value must not appear in list response"
+        );
+
+        // DELETE → 204.
+        let res = client
+            .delete(format!("{}/admin/creds/test-gh-cred", BASE))
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .expect("Gateway not running");
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+        // GET no longer lists it.
+        let res = client
+            .get(format!("{}/admin/creds", BASE))
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .expect("Gateway not running");
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.text().await.unwrap();
+        assert!(
+            !body.contains("test-gh-cred"),
+            "deleted cred must not appear in list"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg_attr(
+        not(feature = "integration"),
+        ignore = "Requires running gateway. Run with: cargo test --features integration"
+    )]
+    async fn delete_nonexistent_cred_is_idempotent() {
+        let client = reqwest::Client::new();
+        let token = admin_token();
+
+        let res = client
+            .delete(format!("{}/admin/creds/does-not-exist", BASE))
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .expect("Gateway not running");
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    #[cfg_attr(
+        not(feature = "integration"),
+        ignore = "Requires running gateway. Run with: cargo test --features integration"
+    )]
+    async fn create_token_with_unknown_cred_name_returns_400() {
+        let client = reqwest::Client::new();
+        let token = admin_token();
+
+        let res = client
+            .post(format!("{}/admin/tokens", BASE))
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({
+                "name": "test-token-bad-cred",
+                "scope": ["github"],
+                "creds": { "github": "nonexistent-cred" }
+            }))
+            .send()
+            .await
+            .expect("Gateway not running");
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
 /// Integration tests that require a running gateway.
 ///
 /// These tests are **opt-in** via the `integration` feature flag.
@@ -762,7 +904,7 @@ mod registry_tests {
     async fn test_create_and_validate_token() {
         let (registry, _dir) = create_registry().await;
         let (record, token_value) = registry
-            .create_token("test".to_string(), vec![], true)
+            .create_token("test".to_string(), vec![], true, Default::default())
             .await
             .unwrap();
 
@@ -779,7 +921,7 @@ mod registry_tests {
     async fn test_wrong_token_fails_validation() {
         let (registry, _dir) = create_registry().await;
         registry
-            .create_token("test".to_string(), vec![], true)
+            .create_token("test".to_string(), vec![], true, Default::default())
             .await
             .unwrap();
 
@@ -791,7 +933,7 @@ mod registry_tests {
     async fn test_revoked_token_fails_validation() {
         let (registry, _dir) = create_registry().await;
         let (record, token_value) = registry
-            .create_token("test".to_string(), vec![], true)
+            .create_token("test".to_string(), vec![], true, Default::default())
             .await
             .unwrap();
 
@@ -813,11 +955,16 @@ mod registry_tests {
     async fn test_list_tokens_omits_token_value() {
         let (registry, _dir) = create_registry().await;
         registry
-            .create_token("laptop".to_string(), vec!["anthropic".to_string()], false)
+            .create_token(
+                "laptop".to_string(),
+                vec!["anthropic".to_string()],
+                false,
+                Default::default(),
+            )
             .await
             .unwrap();
         registry
-            .create_token("ci".to_string(), vec![], true)
+            .create_token("ci".to_string(), vec![], true, Default::default())
             .await
             .unwrap();
 
@@ -835,7 +982,7 @@ mod registry_tests {
         let token_value = {
             let registry = TokenRegistry::load_or_create(path.clone()).await.unwrap();
             let (_, token) = registry
-                .create_token("persist".to_string(), vec![], true)
+                .create_token("persist".to_string(), vec![], true, Default::default())
                 .await
                 .unwrap();
             token
@@ -849,7 +996,12 @@ mod registry_tests {
     async fn test_scope_enforcement() {
         let (registry, _dir) = create_registry().await;
         let (_record, scoped_token) = registry
-            .create_token("scoped".to_string(), vec!["openai".to_string()], false)
+            .create_token(
+                "scoped".to_string(),
+                vec!["openai".to_string()],
+                false,
+                Default::default(),
+            )
             .await
             .unwrap();
 
@@ -864,7 +1016,7 @@ mod registry_tests {
     async fn test_empty_scope_allows_all_routes() {
         let (registry, _dir) = create_registry().await;
         let (_record, token) = registry
-            .create_token("all".to_string(), vec![], true)
+            .create_token("all".to_string(), vec![], true, Default::default())
             .await
             .unwrap();
 
@@ -878,12 +1030,22 @@ mod registry_tests {
     async fn test_duplicate_token_name_is_rejected() {
         let (registry, _dir) = create_registry().await;
         registry
-            .create_token("laptop".to_string(), vec!["openai".to_string()], false)
+            .create_token(
+                "laptop".to_string(),
+                vec!["openai".to_string()],
+                false,
+                Default::default(),
+            )
             .await
             .unwrap();
 
         let error = registry
-            .create_token("laptop".to_string(), vec!["anthropic".to_string()], false)
+            .create_token(
+                "laptop".to_string(),
+                vec!["anthropic".to_string()],
+                false,
+                Default::default(),
+            )
             .await
             .unwrap_err();
 

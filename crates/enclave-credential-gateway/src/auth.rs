@@ -323,7 +323,12 @@ mod tests {
             .await
             .unwrap();
         let (_record, token) = registry
-            .create_token("claude".to_string(), vec!["anthropic".to_string()], false)
+            .create_token(
+                "claude".to_string(),
+                vec!["anthropic".to_string()],
+                false,
+                Default::default(),
+            )
             .await
             .unwrap();
         let req = Request::builder()
@@ -347,7 +352,12 @@ mod tests {
             .await
             .unwrap();
         let (_record, token) = registry
-            .create_token("claude".to_string(), vec!["anthropic".to_string()], false)
+            .create_token(
+                "claude".to_string(),
+                vec!["anthropic".to_string()],
+                false,
+                Default::default(),
+            )
             .await
             .unwrap();
         let req = Request::builder()
@@ -372,7 +382,12 @@ mod tests {
             .await
             .unwrap();
         let (_record, token) = registry
-            .create_token("github".to_string(), vec!["github".to_string()], false)
+            .create_token(
+                "github".to_string(),
+                vec!["github".to_string()],
+                false,
+                Default::default(),
+            )
             .await
             .unwrap();
         let req = Request::builder()
@@ -395,7 +410,12 @@ mod tests {
             .await
             .unwrap();
         let (_record, token) = registry
-            .create_token("github".to_string(), vec!["github".to_string()], false)
+            .create_token(
+                "github".to_string(),
+                vec!["github".to_string()],
+                false,
+                Default::default(),
+            )
             .await
             .unwrap();
         let req = Request::builder()

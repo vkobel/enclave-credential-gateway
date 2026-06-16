@@ -15,10 +15,13 @@ cp target/release/gate /usr/local/bin/
 
 **2. Write the config file:**
 
+Copy [`docs/config.example.toml`](config.example.toml) to `~/.config/gate/config.toml` and fill in your values.
+
 ```toml
-# ~/.config/gate/config.toml
+# ~/.config/gate/config.toml (minimal)
 gateway_url = "https://gw.example.com"
 admin_token = "..."   # only needed for `gate admin ...` commands
+e2e = false           # set to true and add [attestation] for production
 ```
 
 **3. Create or add a phantom token:**
@@ -182,6 +185,86 @@ gh repo list
 
 ---
 
+## Service credentials
+
+Registered credentials are RAM-only — after a gateway restart they must be re-registered, and phantom tokens with explicit `--cred` bindings hard-fail with 503 until the named credential is re-registered.
+
+```bash
+# Register a credential (value read from stdin — avoids shell history)
+echo "sk-..." | gate admin creds register openai
+# Or pass inline (stored in shell history)
+gate admin creds register openai sk-...
+# With an explicit name (defaults to <service> if omitted)
+gate admin creds register openai --name openai-prod
+echo "sk-..." | gate admin creds register openai --name openai-prod
+
+# List registered credentials
+gate admin creds ls
+
+# Remove a credential
+gate admin creds rm openai-prod
+```
+
+When creating a token, bind a route to a named credential so it uses that credential instead of the gateway-wide env var:
+
+```bash
+gate admin token create --name agent --scope openai --cred openai=openai-prod
+```
+
+Direct curl equivalents:
+
+```bash
+# Register
+curl -s -X POST https://gw.example.com/admin/creds \
+  -H "Authorization: Bearer $GATE_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"openai-prod","service":"openai","value":"sk-..."}'
+
+# List
+curl -s https://gw.example.com/admin/creds \
+  -H "Authorization: Bearer $GATE_ADMIN_TOKEN" | jq
+
+# Remove
+curl -s -X DELETE https://gw.example.com/admin/creds/openai-prod \
+  -H "Authorization: Bearer $GATE_ADMIN_TOKEN"
+```
+
+---
+
+## Admin channel (steve E2E encryption)
+
+Admin commands (`gate admin creds ...`, `gate admin token ...`) are sent over the steve-encrypted channel by default (`e2e = true`).
+
+**Local dev / Docker Compose** — disable encryption:
+
+```toml
+# ~/.config/gate/config.toml
+e2e = false
+```
+
+**Debug against a remote gateway** — use the encrypted channel with all-zero PCRs. The steve SDK does not enforce PCR values yet, so zeros pass validation and let you test the E2E path without a real attestation report:
+
+```toml
+# ~/.config/gate/config.toml
+[attestation]
+pcr0 = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+pcr1 = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+pcr2 = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+```
+
+**Production Caution enclave** — fill PCR values from `caution verify`:
+
+```toml
+# ~/.config/gate/config.toml
+[attestation]
+pcr0 = "..."   # 96 hex chars (SHA-384 / 48 bytes)
+pcr1 = "..."
+pcr2 = "..."
+# base_url = "..."   # steve URL; defaults to gateway_url
+```
+
+---
+
 ## Verifying the gateway
 
 ```bash
@@ -220,6 +303,7 @@ Revocation takes effect immediately. In-flight requests complete; all subsequent
 | `403 Forbidden` | Token doesn't have this route in its scope | Recreate token with correct `--scope`, or use `--all-routes` for all routes |
 | `404 Not Found` | Unknown route prefix | Check the prefix matches a built-in route key in `profiles/routes` |
 | `503 Service Unavailable` | Real credential env var missing on the gateway | Set the credential env var and restart |
+| `e2e is enabled but no [attestation] section found` | `e2e` defaults to true, but no PCR values set | Add `e2e = false` for local dev; or add `[attestation]` with real PCRs for production; or use all-zero PCRs to test the encrypted channel without attestation |
 | `gate activate` fails | Token not in config file | Add `[tokens.<name>]` with `token = "gate_..."` to `~/.config/gate/config.toml` |
 | `GH_HOST` is wrong | Set to full URL instead of hostname | `GH_HOST` must be just the hostname (`gw.example.com`), not a URL |
 | `gh` returns 407 despite `GH_TOKEN` being set | `gh` treats custom `GH_HOST` as Enterprise and ignores `GH_TOKEN` | Export `GH_ENTERPRISE_TOKEN` (or run `eval "$(gate activate <name> --eval --tool gh)"` which sets both) |

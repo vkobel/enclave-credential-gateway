@@ -1,0 +1,29 @@
+gateway_url = "https://gw.example.com"
+admin_token = "..."       # GATE_ADMIN_TOKEN on the server; required for gate admin commands
+
+# E2E encryption mode (steve channel).
+# Three options:
+
+# Option A — local dev / Docker Compose: disable encryption entirely.
+# e2e = false
+
+# Option B — debug against a remote gateway (skip PCR verification).
+# steve SDK does not enforce PCR values yet; all-zero PCRs let you use the
+# encrypted channel without a real attestation report.
+[attestation]
+pcr0 = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+pcr1 = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+pcr2 = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+
+# Option C — production Caution enclave: fill PCRs from `caution verify` output.
+# [attestation]
+# pcr0 = "..."   # 96 hex chars (SHA-384 / 48 bytes)
+# pcr1 = "..."
+# pcr2 = "..."
+# base_url = "https://gw.example.com"   # steve URL; defaults to gateway_url
+
+# Phantom tokens saved by `gate admin token create`.
+# [tokens.laptop]
+# token = "gate_..."
+# scope = ["github", "anthropic", "openai"]
+# all_routes = false

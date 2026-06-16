@@ -32,6 +32,11 @@ pub struct TokenRecord {
     pub created_at: DateTime<Utc>,
     pub status: TokenStatus,
     pub token_hash: String,
+    /// Optional per-route credential binding: maps route id → service-token name.
+    /// When a proxy request matches a route listed here, the named service token
+    /// is used instead of the env-var credential source.
+    #[serde(default)]
+    pub creds: std::collections::HashMap<String, String>,
 }
 
 impl TokenRecord {
@@ -74,6 +79,7 @@ impl TokenRegistry {
         name: String,
         scope: Vec<String>,
         all_routes: bool,
+        creds: std::collections::HashMap<String, String>,
     ) -> Result<(TokenRecord, String), TokenCreateError> {
         let mut tokens = self.tokens.write().await;
         if tokens.iter().any(|record| record.name == name) {
@@ -93,6 +99,7 @@ impl TokenRegistry {
             created_at: Utc::now(),
             status: TokenStatus::Active,
             token_hash: hash,
+            creds,
         };
 
         tokens.push(record.clone());

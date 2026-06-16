@@ -49,7 +49,6 @@ pub struct ToolFile {
     pub content: String,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvExport {
     pub key: String,
@@ -74,8 +73,6 @@ impl Activation {
             )
             .collect()
     }
-
-
 }
 
 struct ToolContext<'a> {
@@ -467,6 +464,7 @@ mod tests {
             gateway_url: "https://gw.example.com".to_string(),
             admin_token: None,
             tokens,
+            ..Config::default()
         }
     }
 
@@ -517,13 +515,8 @@ env:
     #[test]
     fn unknown_tool_and_route_errors_stay_clear() {
         let config = config_with_scope(&["openai"]);
-        let tool_error = activate(
-            &config,
-            "laptop",
-            Some(&["missing-tool".to_string()]),
-            None,
-        )
-        .unwrap_err();
+        let tool_error =
+            activate(&config, "laptop", Some(&["missing-tool".to_string()]), None).unwrap_err();
         assert!(tool_error
             .to_string()
             .contains("Unknown tool adapter 'missing-tool'"));

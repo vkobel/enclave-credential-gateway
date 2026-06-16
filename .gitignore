@@ -12,6 +12,4 @@ dist/
 .vscode/
 *.swp
 .codex
-.omx
-.caution
 .claude/

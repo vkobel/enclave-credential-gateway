@@ -2,6 +2,7 @@
 
 pub mod admin;
 pub mod auth;
+pub mod credstore;
 pub mod health;
 pub mod profile;
 pub mod proxy;
@@ -10,6 +11,7 @@ pub mod state;
 
 // Re-exports for convenience
 pub use auth::PhantomAuth;
+pub use credstore::CredStore;
 pub use profile::{
     is_git_smart_http, CredentialSource, GitProtocolRoute, InjectMode, ProfileRoute, RouteEntry,
     RouteMatcher,

@@ -102,6 +102,7 @@ async fn main() {
         phantom_token,
         token_registry,
         admin_token,
+        cred_store: Default::default(),
         routes,
         https_client,
     });
