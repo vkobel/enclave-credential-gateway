@@ -47,5 +47,5 @@ domain: gate.kobl.one
 e2e: true
 # debug: false   # NEVER true in prod: zeros PCRs and opens SSH on port 22.
 
-debug: true
+debug: false
 ssh_keys: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDRFl45BU5fsL5LzW7O7R/EpxQZqtEXROS8nUltSU0uW
